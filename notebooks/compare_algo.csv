@@ -1,0 +1,5 @@
+algo,batch_size,buffer_size,env_name,epochs,hidden_sizes,policy_lr,value_net_lr
+VANILLA,4,5000,LunarLander-v2,50,"[64, 64]",0.001,0.001
+REWARD_TO_GO,4,5000,LunarLander-v2,50,"[64, 64]",0.001,0.001
+VANILLA,4,5000,BipedalWalker-v3,50,"[64, 64]",0.001,0.001
+REWARD_TO_GO,4,5000,BipedalWalker-v3,50,"[64, 64]",0.001,0.001
