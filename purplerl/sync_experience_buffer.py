@@ -103,6 +103,13 @@ class ExperienceBufferBase:
     def success_rate(self) -> float:
         return self.ep_success_count / self.ep_success_info_count
 
+    def get_stats(self):
+        return {
+            "Mean return": self.mean_return().item(),
+            "Success": self.success_rate(),
+            "Ep Count": self.ep_count 
+        }
+
 class MonoObsExperienceBuffer(ExperienceBufferBase):
     def __init__(self, batch_size:int, buffer_size: int, obs_shape: list[int], act_shape: list[int]) -> None:
         super().__init__(batch_size, buffer_size, act_shape)

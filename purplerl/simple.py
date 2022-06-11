@@ -127,9 +127,15 @@ class Trainer:
             if (epoch % save_freq == 0) or (epoch == epochs-1):
                 self.logger.save_state({}, itr = epoch)
 
-            #print(f"Epoch: {epoch}; P-Loss: {policy_updater.policy_loss:.4f}; V-Loss: {policy_updater.value_loss:.4f}; Entropy: {mean_entropy.item():.4f}; Mean reward: {mean_return:.2f}; Episode count: {experience.ep_count}")
-            #print(f"Epoch: {epoch}; P-Loss: {policy_updater.policy_loss:.4f}; Mean reward: {mean_return:.4f}; Episode count: {experience.ep_count}; Success: {env_manager.get_success_rate():0.4f}; Entropy: {mean_entropy.item():.4f}")
-            print(f"Epoch: {epoch}; P-Loss: {policy_updater.policy_loss:.4f}; V-Loss: {policy_updater.value_loss:.4f}; Mean reward: {mean_return:.4f}; Success: {success_rate*100:.0f}%; Episode count: {experience.ep_count}; LR: {new_lr:e}")
+            log_dict = policy_updater.get_stats() | experience.get_stats()
+            log_str = ""
+            for name, value in log_dict.items():
+                if type(value) == float:
+                    log_str += f"{name}: {value:.4f}; "
+                else: 
+                    log_str += f"{name}: {value}; "
+            
+            print(f"Epoch: {epoch}; {log_str} LR: {new_lr:e}")
             self.logger.log_tabular('Epoch', epoch)
             self.logger.log_tabular('EpochEpisodeCount', experience.ep_count)
             self.logger.log_tabular('Time', time.time()-epoch_start_time)

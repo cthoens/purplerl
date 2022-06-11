@@ -85,11 +85,11 @@ def run():
         policy.action_shape
     )
 
-    policy_updater= RewardToGo(
-             policy=policy,
-             experience=experience,
-             policy_lr=1e-3,
-    )
+    # policy_updater= RewardToGo(
+    #          policy=policy,
+    #          experience=experience,
+    #          policy_lr=1e-3,
+    # )
 
     policy_updater = Vanilla(
         policy=policy,

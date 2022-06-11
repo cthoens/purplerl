@@ -145,6 +145,11 @@ class PolicyUpdater:
         logp = self.policy.action_dist(obs).log_prob(act).sum(-1)
         return -(logp * weights).mean()
 
+    def get_stats(self):
+        return {
+            "P-Loss": self.policy_loss.item()
+        }
+
 
 class RewardToGo(PolicyUpdater):
     def __init__(self, 
@@ -200,6 +205,9 @@ class Vanilla(PolicyUpdater):
         weight = discount_cumsum(deltas, self.experience.gamma * self.lam)
         self.weight[batch][path_slice] = torch.tensor(np.array(weight), **tensor_args)
 
-    def log(self, logger):
-        logger.log_tabular('ValueLoss', self.value_loss)
+    def get_stats(self):
+        stats = super().get_stats()
+        stats["V-Loss"] = self.value_loss.item()
+        return stats
+            
         
