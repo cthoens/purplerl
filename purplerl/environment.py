@@ -4,16 +4,16 @@ from mlagents_envs.side_channel.engine_configuration_channel import EngineConfig
 import numpy as np
 from collections import namedtuple
 
-import torch
+import torch.nn
+
 import gym
 from gym.spaces import Box, MultiDiscrete, Tuple as TupleSpace
 
 from mlagents_envs.environment import UnityEnvironment, ActionTuple
-from purplerl.config import gpu
 
 
 class EnvManager:
-    def reset(self) -> list[torch.tensor]:
+    def reset(self) -> list[np.ndarray]:
         """
         Resets all environments
 
@@ -22,7 +22,7 @@ class EnvManager:
         """
         raise NotImplemented()
 
-    def step(self, act: torch.tensor) -> list[(torch.tensor, torch.tensor, torch.tensor)]:
+    def step(self, act: np.ndarray) -> list[(np.ndarray, np.ndarray, np.ndarray)]:
         """
         Steps all environments. Environments that reach the end of their episode are reset automatically.
 
@@ -108,7 +108,7 @@ class UnityEnvManager(EnvManager):
         obs, _ = self._get_obs()
         return obs
 
-    def step(self, act: torch.tensor) -> list[ObsType]:
+    def step(self, act: np.ndarray) -> list[ObsType]:
         # Tell the unity env about the actions / decision and step the environment
         decision_steps, terminal_steps = self.env.get_steps(self.behavior_name)
         continuous_actions = np.array([[]], dtype=np.float32)
@@ -127,9 +127,6 @@ class UnityEnvManager(EnvManager):
             assert(done[agent_id] == False)
             rew[agent_id] += terminal_steps.reward[terminal_step_index]
             done[agent_id] = True
-
-        rew = torch.as_tensor(rew, dtype=torch.float32, device=gpu)
-        done = torch.as_tensor(done, dtype=torch.float32, device=gpu)
 
         return obs, rew, done
 
@@ -170,11 +167,11 @@ class UnityEnvManager(EnvManager):
 
         assert(obs_count == self.env_count)
         obs = ObsType(
-            training= torch.as_tensor(trainingObs, device=gpu),
-            goal= torch.as_tensor(goalObs, device=gpu),
-            jointPos= torch.as_tensor(jointPosObs, device=gpu),
-            goalPos= torch.as_tensor(goalPosObs, device=gpu),
-            remaining= torch.as_tensor(remainingObs, device=gpu)
+            training= trainingObs,
+            goal= goalObs,
+            jointPos= jointPosObs,
+            goalPos= goalPosObs,
+            remaining= remainingObs
         )
         return obs, rew
 
@@ -194,10 +191,10 @@ class GymEnvManager(EnvManager):
         Returns:
             first observation per environent
         """
-        obs = torch.as_tensor(np.array([env.reset() for env in self.envs], dtype=np.float32), device=gpu)
+        obs = np.array([env.reset() for env in self.envs], dtype=np.float32)
         return obs
 
-    def step(self, act: torch.tensor):
+    def step(self, act: np.ndarray):
         """
         Steps all environments. Environments that reach the end of their episode are reset automatically.
 
@@ -213,15 +210,15 @@ class GymEnvManager(EnvManager):
               - done (Tensor of bool): true if the environments episode has ended and the environment was reset
 
         """
-        interaction =  [env.step(act.reshape(self.action_space.shape).cpu().numpy()) for env, act in zip(self.envs, act)]
-        obs =  torch.as_tensor(np.array([next_obs for next_obs, _, _, _ in interaction], dtype=np.float32), device=gpu)
-        rew =  torch.as_tensor(np.array([rew for _, rew, _, _ in interaction], dtype=np.float32), device=gpu)
-        done = torch.as_tensor(np.array([done for _, _, done, _ in interaction], dtype=np.float32), device=gpu)
+        interaction =  [env.step(act.reshape(self.action_space.shape)) for env, act in zip(self.envs, act)]
+        obs =  np.array([next_obs for next_obs, _, _, _ in interaction], dtype=np.float32)
+        rew =  np.array([rew for _, rew, _, _ in interaction], dtype=np.float32)
+        done = np.array([done for _, _, done, _ in interaction], dtype=np.float32)
         success = np.array([info.get("success", None) for _, _, _, info in interaction], dtype=np.float32)
         for index, (env, env_done) in enumerate(zip(self.envs, done)):
             if not env_done:
                 continue
-            obs[index] = torch.as_tensor(env.reset(), device=gpu)
+            obs[index] = env.reset()
         return obs, rew, done, success
 
 

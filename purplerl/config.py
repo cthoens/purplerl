@@ -4,6 +4,11 @@ import torch
 
 gpu = torch.device('cuda')
 
+tensor_args = {
+    "dtype": torch.float32, 
+    "device": gpu
+}
+
 # Where experiment outputs are saved by default:
 DEFAULT_DATA_DIR = osp.join(osp.abspath(osp.dirname(osp.dirname(__file__))),'data')
 

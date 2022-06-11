@@ -1,9 +1,9 @@
+import itertools
+from random import gammavariate
 import numpy as np
 
 import gym
 from gym.spaces import Discrete, MultiDiscrete
-
-import scipy.signal
 
 import torch
 import torch.nn as nn
@@ -11,8 +11,8 @@ from torch.distributions.categorical import Categorical
 from torch.distributions.normal import Normal
 from torch.optim import Adam
 
-from purplerl.config import gpu
-from purplerl.sync_experience_buffer import ExperienceBufferBase
+from purplerl.config import tensor_args
+from purplerl.sync_experience_buffer import ExperienceBufferBase, discount_cumsum
 
 
 def mlp(sizes, activation=nn.Tanh, output_activation=nn.Identity):
@@ -22,23 +22,6 @@ def mlp(sizes, activation=nn.Tanh, output_activation=nn.Identity):
         layers += [activation() if j < len(sizes)-2 else output_activation()]
 
     return nn.Sequential(*layers)
-
-def discount_cumsum(x, discount):
-    """
-    magic from rllab for computing discounted cumulative sums of vectors.
-
-    input: 
-        vector x, 
-        [x0, 
-         x1, 
-         x2]
-
-    output:
-        [x0 + discount * x1 + discount^2 * x2,  
-         x1 + discount * x2,
-         x2]
-    """
-    return scipy.signal.lfilter([1], [1, float(-discount)], x[::-1], axis=0)[::-1]
 
 
 class StochasticPolicy(nn.Module):
@@ -122,7 +105,7 @@ class PolicyUpdater:
         self.policy_loss = None
         self.policy_epochs = policy_epochs
 
-        self.weight = torch.zeros(experience.batch_size, experience.buffer_size, dtype=torch.float32, device=gpu)
+        self.weight = torch.zeros(experience.batch_size, experience.buffer_size, **tensor_args)
 
     def step(self):
         """
@@ -144,7 +127,7 @@ class PolicyUpdater:
             self._end_episode_batch(batch)
 
     def _end_episode_batch(self, batch: int):
-        raise NotImplemented
+        pass
 
 
     def reset(self):
@@ -163,73 +146,59 @@ class PolicyUpdater:
         return -(logp * weights).mean()
 
 
-class Vanilla(PolicyUpdater):
-    def _end_episode_batch(self, batch: int):
-        ep_range = range(self.experience.ep_start_index[batch], self.experience.next_step_index)
-        self.weight[batch, ep_range] = self.experience.ep_cum_reward[batch]
-
-
 class RewardToGo(PolicyUpdater):
     def __init__(self, 
         policy: StochasticPolicy,
         experience: ExperienceBufferBase,
         policy_lr: float = 1e-2,
-        policy_epochs: int = 3,
-        gamma: float = 0.99
+        policy_epochs: int = 3        
     ) -> None:
         super().__init__(policy, experience, policy_lr, policy_epochs)
-        self.gamma = gamma
-
-    def _end_episode_batch(self, batch: int):
-        ep_range = range(self.experience.ep_start_index[batch], self.experience.next_step_index)
-        # TODO Fix .cpu().numpy()
-        self.weight[batch, ep_range] = torch.as_tensor(np.array(discount_cumsum(self.experience.step_reward[batch, ep_range].cpu().numpy(), self.gamma)), dtype=torch.float32, device=gpu)
-
-        #ep_range_1 = range(self.experience.ep_start_index[batch]+1, self.experience.next_step_index  )
-        #ep_range_2 = range(self.experience.ep_start_index[batch]   , self.experience.next_step_index-1)
-        #self.weight[batch, ep_range] = self.experience.ep_cum_reward[batch]
-        #self.weight[batch, ep_range_1] -= self.experience.cum_reward[batch, ep_range_2]
-        
+        self.weight = self.experience.discounted_reward
 
 
-class ValueFunction(PolicyUpdater):
+class Vanilla(PolicyUpdater):
     def __init__(self,
-        obs_shape: list,
         hidden_sizes: list,
         policy: StochasticPolicy,
         experience: ExperienceBufferBase,
         policy_lr=1e-2,
         value_net_lr = 1e-2,
+        lam: float = 0.95
     ) -> None:
         super().__init__(policy, experience, policy_lr)
+        self.lam = lam
         self.value_net = self.mean_net = nn.Sequential(
             policy.obs_encoder,
-            mlp(obs_shape + hidden_sizes + [1])
-        )
+            mlp(list(policy.obs_encoder.shape) + hidden_sizes + [1])
+        ).cuda()
         self.value_optimizier = torch.optim.Adam(self.value_net.parameters(), lr = value_net_lr)
         self.value_loss_function = torch.nn.MSELoss()
         self.value_loss = 0.0
-        self.reward_to_go = torch.zeros(experience.batch_size, experience.buffer_size, dtype=torch.float32, device=gpu)
 
     def update(self):
         super().update()
 
-        for i in range(20):
+        for i in range(10):
             self.value_optimizier.zero_grad()
             self.value_loss = self._value_loss()
             self.value_loss.backward()
             self.value_optimizier.step()
 
     def _value_loss(self):
-        return self.value_loss_function(self.value_net(self.experience.obs).squeeze(-1), self.reward_to_go)
+        return self.value_loss_function(self.value_net(self.experience.obs).squeeze(-1), self.experience.discounted_reward)
 
     def _end_episode_batch(self, batch: int):
-        ep_range = range(self.experience.ep_start_index[batch], self.experience.next_step_index)
-        ep_range_1 = range(self.experience.ep_start_index[batch]+1, self.experience.next_step_index  )
-        ep_range_2 = range(self.experience.ep_start_index[batch]   , self.experience.next_step_index-1)
-        self.reward_to_go[batch, ep_range] = self.experience.ep_cum_reward[batch]
-        self.reward_to_go[batch, ep_range_1] -= self.experience.cum_reward[batch, ep_range_2]
-        self.weight = self.reward_to_go
+        path_slice = range(self.experience.ep_start_index[batch], self.experience.next_step_index)
+        rews = self.experience.step_reward[batch][path_slice]
+        
+        vals = np.zeros(len(path_slice)+1, dtype=np.float32)
+        vals[:-1] = self.value_net(self.experience.obs[batch][path_slice]).squeeze(-1).cpu().numpy()
+        vals[-1] = 0.0
+                
+        deltas = rews + self.experience.gamma * vals[1:] - vals[:-1]
+        weight = discount_cumsum(deltas, self.experience.gamma * self.lam)
+        self.weight[batch][path_slice] = torch.tensor(np.array(weight), **tensor_args)
 
     def log(self, logger):
         logger.log_tabular('ValueLoss', self.value_loss)

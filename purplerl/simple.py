@@ -2,6 +2,7 @@ import math
 import time
 from enum import Enum
 
+import numpy as np
 import torch
 
 from gym.spaces import Discrete, MultiDiscrete, Box
@@ -10,13 +11,17 @@ from purplerl.spinup.utils.logx import EpochLogger
 from purplerl.environment import EnvManager, GymEnvManager, IdentityObsEncoder
 from purplerl.sync_experience_buffer import ExperienceBufferBase, MonoObsExperienceBuffer
 from purplerl.policy import StochasticPolicy, CategoricalPolicy, ContinuousPolicy
-from purplerl.policy import PolicyUpdater, Vanilla, RewardToGo, ValueFunction
+from purplerl.policy import PolicyUpdater, RewardToGo, Vanilla
+from purplerl.config import gpu
 
 
 class Algo(Enum):
-    VANILLA = 1,
     REWARD_TO_GO = 2,
-    VALUE_NET = 3
+    VANILLA = 3
+
+
+def to_tensor(input: np.ndarray) -> torch.tensor:
+        return torch.as_tensor(input, dtype=torch.float32, device=gpu)
 
 
 class Trainer:
@@ -72,9 +77,7 @@ class Trainer:
         if algo == Algo.REWARD_TO_GO:
             policy_updater = RewardToGo(policy, experience, policy_lr)
         elif algo == Algo.VANILLA:
-            policy_updater = Vanilla(policy, experience, policy_lr)
-        elif algo == Algo.VALUE_NET:
-            policy_updater = ValueFunction(obs_shape, hidden_sizes, policy, experience, policy_lr, value_net_lr)
+            policy_updater = Vanilla(obs_shape, hidden_sizes, policy, experience, policy_lr, value_net_lr)
         else:
             raise Exception("Unknown algorithm")
 
@@ -97,12 +100,13 @@ class Trainer:
             policy_updater.reset()
             action_mean_entropy = torch.empty(experience.batch_size, experience.buffer_size, dtype=torch.float32)
             with torch.no_grad():
-                obs = env_manager.reset()
+                obs = to_tensor(env_manager.reset())
                 for step, _ in enumerate(range(experience.buffer_size)):
                     act_dist = policy.action_dist(obs)
                     act = act_dist.sample()
                     action_mean_entropy[:, step] = act_dist.entropy().mean(-1)
-                    next_obs, rew, done, success = env_manager.step(act)
+                    next_obs, rew, done, success = env_manager.step(act.cpu().numpy())
+                    next_obs = to_tensor(next_obs)
 
                     experience.step(obs, act, rew)
                     policy_updater.step()
@@ -116,7 +120,7 @@ class Trainer:
 
             # train
             policy_updater.update()
-            new_lr = 1e-4 *  math.exp(-3.0 * success_rate)
+            new_lr = 1e-3 *  math.exp(-2.0 * success_rate)
             for g in policy_updater.policy_optimizer.param_groups:
                 g['lr'] = new_lr
 
@@ -125,7 +129,7 @@ class Trainer:
 
             #print(f"Epoch: {epoch}; P-Loss: {policy_updater.policy_loss:.4f}; V-Loss: {policy_updater.value_loss:.4f}; Entropy: {mean_entropy.item():.4f}; Mean reward: {mean_return:.2f}; Episode count: {experience.ep_count}")
             #print(f"Epoch: {epoch}; P-Loss: {policy_updater.policy_loss:.4f}; Mean reward: {mean_return:.4f}; Episode count: {experience.ep_count}; Success: {env_manager.get_success_rate():0.4f}; Entropy: {mean_entropy.item():.4f}")
-            print(f"Epoch: {epoch}; P-Loss: {policy_updater.policy_loss:.4f}; Mean reward: {mean_return:.4f}; Success: {success_rate*100:.0f}%; Episode count: {experience.ep_count}; LR: {new_lr:e}")
+            print(f"Epoch: {epoch}; P-Loss: {policy_updater.policy_loss:.4f}; V-Loss: {policy_updater.value_loss:.4f}; Mean reward: {mean_return:.4f}; Success: {success_rate*100:.0f}%; Episode count: {experience.ep_count}; LR: {new_lr:e}")
             self.logger.log_tabular('Epoch', epoch)
             self.logger.log_tabular('EpochEpisodeCount', experience.ep_count)
             self.logger.log_tabular('Time', time.time()-epoch_start_time)

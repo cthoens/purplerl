@@ -1,37 +1,57 @@
 import numpy as np
 import torch
 
-from purplerl.config import gpu
+import scipy.signal
+
+from purplerl.config import tensor_args
+
+def discount_cumsum(x, discount):
+    """
+    magic from rllab for computing discounted cumulative sums of vectors.
+
+    input: 
+        vector x, 
+        [x0, 
+         x1, 
+         x2]
+
+    output:
+        [x0 + discount * x1 + discount^2 * x2,  
+         x1 + discount * x2,
+         x2]
+    """
+    return scipy.signal.lfilter([1], [1, float(-discount)], x[::-1], axis=0)[::-1]
+
 
 class ExperienceBufferBase:
     def __init__(self, 
         batch_size:int, 
         buffer_size: int, 
-        act_shape: list[int]
+        act_shape: list[int],
+        gamma: float = 0.99
     ) -> None:
         # Saved parameters
+        self.gamma = gamma
         self.batch_size = batch_size
         self.buffer_size = buffer_size
 
         # Overall statistics
         self.ep_count = 0
         self.next_step_index = 0
-        # Number of successfully episodes
-        self.ep_success_count = 0
-        # Number of times we have received info about success of failure of an episode
-        self.ep_success_info_count = 0
-        self.ep_return =  torch.zeros(batch_size * buffer_size, dtype=torch.float32, device=gpu)
+        self.ep_success_count = 0 # Number of successfully episodes
+        self.ep_success_info_count = 0 # Number of times we have received info about success of failure of an episode
+        self.ep_return =  np.zeros(batch_size * buffer_size, dtype=np.float32)
 
         # Per bach data
         self.ep_start_index = np.zeros(batch_size, dtype=np.int32)
-        self.ep_cum_reward = torch.zeros(batch_size, dtype=torch.float32, device=gpu)
+        self.ep_cum_reward = np.zeros(batch_size, dtype=np.float32)
 
         # Stored data
-        self.action = torch.zeros(batch_size, buffer_size, *act_shape, dtype=torch.float32, device=gpu)
-        self.step_reward = torch.zeros(batch_size, buffer_size, dtype=torch.float32, device=gpu)
+        self.action = torch.zeros(batch_size, buffer_size, *act_shape, **tensor_args)
+        self.step_reward = np.zeros((batch_size, buffer_size), dtype=np.float32)
 
         # Calculated data
-        self.cum_reward = torch.zeros(batch_size, buffer_size, dtype=torch.float32, device=gpu)
+        self.discounted_reward = torch.zeros(batch_size, buffer_size, **tensor_args)
 
     def step(self, obs: torch.Tensor, act: torch.Tensor, reward: torch.Tensor):
         # Update in episode data
@@ -40,7 +60,6 @@ class ExperienceBufferBase:
         # Update overall data
         self.action[:, self.next_step_index] = act
         self.step_reward[:, self.next_step_index] = reward
-        self.cum_reward[:, self.next_step_index] = self.ep_cum_reward
         self.next_step_index += 1
 
     # accumulates statistics for all finished batches
@@ -48,6 +67,11 @@ class ExperienceBufferBase:
         for batch, finished in enumerate(finished_batches):
             if not finished:
                 continue
+
+            ep_range = range(self.ep_start_index[batch], self.next_step_index)
+            discounted_reward = discount_cumsum(self.step_reward[batch, ep_range], self.gamma)
+            self.discounted_reward[batch, ep_range] = torch.tensor(np.array(discounted_reward), **tensor_args)
+
 
             self.ep_start_index[batch] = self.next_step_index
             self.ep_return[self.ep_count] = self.ep_cum_reward[batch]
@@ -71,7 +95,7 @@ class ExperienceBufferBase:
         # This is mostly to create a clean state for unit testing
         self.action[...] = 0.0
         self.step_reward[...] = 0.0
-        self.cum_reward[...] = 0.0
+        self.discounted_reward[...] = 0.0
 
     def mean_return(self) -> float:
         return self.ep_return[:self.ep_count].mean()
@@ -83,7 +107,7 @@ class MonoObsExperienceBuffer(ExperienceBufferBase):
     def __init__(self, batch_size:int, buffer_size: int, obs_shape: list[int], act_shape: list[int]) -> None:
         super().__init__(batch_size, buffer_size, act_shape)
         # Stored data
-        self.obs = torch.zeros(batch_size, buffer_size, *obs_shape, dtype=torch.float32, device=gpu)
+        self.obs = torch.zeros(batch_size, buffer_size, *obs_shape, **tensor_args)
 
     def step(self, obs: torch.Tensor, act: torch.Tensor, reward: torch.Tensor):
         self.obs[:,self.next_step_index] = obs

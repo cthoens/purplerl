@@ -1,4 +1,5 @@
 import gym
+from purplerl.policy import Vanilla
 
 import torch
 from torch.nn import Conv2d, Sequential, BatchNorm2d, ReLU, MaxPool2d, Linear, Flatten
@@ -13,7 +14,7 @@ import os.path as osp
 def load_pytorch_policy(fpath, itr, deterministic=False):
     """ Load a pytorch policy saved with Spinning Up Logger."""
 
-    fname = osp.join(fpath, 'pyt_save', 'model'+str(itr)+'.pt')
+    fname = osp.join(fpath, 'pyt_save', str(itr)+'.pt')
     print('\n\nLoading from %s.\n\n'%fname)
 
     model = torch.load(fname)    
@@ -68,14 +69,14 @@ def run():
 
     env_manager= GymEnvManager('workbook-v0', batch_size=batch_size)
 
-    #policy= ContinuousPolicy(
-    #    obs_encoder=WorkbenchObsEncoder(),
-    #    hidden_sizes=[32, 32, 32],
-    #    action_space = env_manager.action_space
-    #)
+    policy= ContinuousPolicy(
+        obs_encoder=WorkbenchObsEncoder(),
+        hidden_sizes=[32, 32, 32],
+        action_space = env_manager.action_space
+    )
 
 
-    policy = load_pytorch_policy("/home/cthoens/code/UnityRL/robotarm/results/RobotArm/RobotArmTest/RobotArmTest_s0/", "4000-backup")
+    #policy = load_pytorch_policy("/home/cthoens/code/UnityRL/robotarm/results/RobotArm/RobotArmTest/RobotArmTest_s0/", "resume")
 
     experience = MonoObsExperienceBuffer(
         batch_size, 
@@ -84,25 +85,27 @@ def run():
         policy.action_shape
     )
 
+    policy_updater= RewardToGo(
+             policy=policy,
+             experience=experience,
+             policy_lr=1e-3,
+    )
+
+    policy_updater = Vanilla(
+        policy=policy,
+        experience=experience,
+        hidden_sizes=[32, 32],
+        policy_lr=1e-3,
+        value_net_lr = 1e-3,
+    )
+
     trainer = Trainer(logger_kwargs)
     trainer.run_training(
         env_manager= env_manager,
         experience= experience,
         policy= policy,
-        policy_updater= RewardToGo(
-            policy=policy,
-            experience=experience,
-            policy_lr=1e-3,
-        ),
-        #policy_updater= ValueFunction(
-        #    obs_shape=None,
-        #    hidden_sizes=[32, 32],
-        #    policy=policy,
-        #    experience=experience,
-        #    policy_lr=1e-3,
-        #    value_net_lr = 1e-3,
-        #),
-        epochs=5000,
+        policy_updater= policy_updater,
+        epochs=50000,
         save_freq=1000,
     )
 
