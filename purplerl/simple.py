@@ -114,7 +114,6 @@ class Trainer:
                     experience.end_episode(done, success)
                     obs = next_obs
 
-                mean_return = experience.mean_return()
                 success_rate = experience.success_rate()
                 mean_entropy = action_mean_entropy.mean()
 
@@ -127,19 +126,19 @@ class Trainer:
             if (epoch % save_freq == 0) or (epoch == epochs-1):
                 self.logger.save_state({}, itr = epoch)
 
+            self.logger.log_tabular('Epoch', epoch)            
             log_dict = policy_updater.get_stats() | experience.get_stats()
             log_str = ""
             for name, value in log_dict.items():
+                self.logger.log_tabular(name, value)
+            
                 if type(value) == float:
                     log_str += f"{name}: {value:.4f}; "
                 else: 
                     log_str += f"{name}: {value}; "
             
-            print(f"Epoch: {epoch}; {log_str} LR: {new_lr:e}")
-            self.logger.log_tabular('Epoch', epoch)
-            self.logger.log_tabular('EpochEpisodeCount', experience.ep_count)
+            print(f"Epoch: {epoch:3}; {log_str} LR: {new_lr:.4e}; Entropy: {mean_entropy.item():.4e}")
             self.logger.log_tabular('Time', time.time()-epoch_start_time)
-            self.logger.log_tabular('AverageEpRet', mean_return.item())
             self.logger.log_tabular('AverageEntropy', mean_entropy.item())
             policy_updater.log(self.logger)
             self.logger.dump_tabular()
