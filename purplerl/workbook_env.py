@@ -1,6 +1,7 @@
 
 import math
-from re import TEMPLATE
+import os
+from re import TEMPLATE, template
 from typing import Optional, Tuple, Union
 
 import numpy as np
@@ -11,20 +12,33 @@ from gym.spaces import Box
 from gym.error import DependencyNotInstalled
 
 from PIL import Image, ImageOps
+from torch import true_divide
 
 class WorkbookEnv(gym.Env):
 
     metadata = {"render_modes": ["human", "rgb_array"], "render_fps": 50}
+
+    goal_alpha = 128
+    fail_alpha = 0
+    block_alpha = 200
+    spawn_alpha = 254
+    traverse_alpha = 255
+   
 
     def __init__(self) -> None:
         # Set these in ALL subclasses
         self.screen = None
         self.clock = None
         self.steps_left = None
-        with Image.open("/home/cthoens/code/UnityRL/purplerl/sheets/sheet-1.png") as image:
-            self.template = np.array(ImageOps.grayscale(image), dtype=np.float32)
-            self.template /= 127.5
-            self.template -= 1.0
+        self.sheets = [
+            ["l00-s01.png", "l00-s02.png", "l00-s03.png"],
+            ["l01-s01.png", "l01-s02.png", "l01-s03.png", "l01-s04.png"],
+            ["l02-s01.png", "l02-s02.png"],
+            ["l03-s01.png",],
+        ]
+        self.templates = [[self._load_template(sheet) for sheet in lesson] for lesson in self.sheets]
+        self.lesson = 0
+        self.template = 0
         
         self.cursor = np.array([
             [0, 0, 0, 1, 0, 0, 0],
@@ -45,8 +59,23 @@ class WorkbookEnv(gym.Env):
         self.action_space = Box(float("-1"), float("1"), (2, ))
         self.observation_space = Box(float("-inf"), float("inf"), (1, 128, 128, ))
 
+    def _load_template(self, name):
+        with Image.open(os.path.join("/home/cthoens/code/UnityRL/purplerl/sheets/", name)) as image:
+            template = np.array(ImageOps.grayscale(image), dtype=np.float32)
+            template /= 127.5
+            template -= 1.0
+        return template
+
+    def set_lesson(self, lesson):
+        if lesson < len(self.lessons):
+            self.lesson = lesson
+            return True
+        else:
+            return False
+    
     def reset(self):
-        self.sheet = np.array(self.template)
+        template_idx = int(np.random.uniform(low=0.0, high=len(self.templates[self.lesson]) - 1e-7))
+        self.sheet = np.array(self.templates[self.lesson][template_idx])
         if np.random.uniform(low=0.0, high=1.0) > 0.5:
             self.sheet = np.flip(self.sheet, axis=1)
         self.sheet = np.rot90(self.sheet, k = int(np.random.uniform(low=0.0, high=3.0 - 1e-7)))

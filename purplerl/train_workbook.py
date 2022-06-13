@@ -1,20 +1,22 @@
+import os
 import gym
-from purplerl.policy import Vanilla
 
 import torch
 from torch.nn import Conv2d, Sequential, BatchNorm2d, ReLU, MaxPool2d, Linear, Flatten
 
-from purplerl.simple import ContinuousPolicy, ExperienceBufferBase, IdentityObsEncoder, MonoObsExperienceBuffer, RewardToGo, Trainer
-from purplerl.environment import GymEnvManager, UnityEnvManager, ObsType
-from purplerl.config import gpu
+import joblib
+
+from purplerl.simple import MonoObsExperienceBuffer, RewardToGo, Trainer
+from purplerl.environment import GymEnvManager
 from purplerl.workbook_env import WorkbookEnv
+from purplerl.policy import ContinuousPolicy, Vanilla
 
 import os.path as osp
 
-def load_pytorch_policy(fpath, itr, deterministic=False):
+def load_pytorch_policy(fpath, name):
     """ Load a pytorch policy saved with Spinning Up Logger."""
 
-    fname = osp.join(fpath, 'pyt_save', str(itr)+'.pt')
+    fname = osp.join(fpath, name)
     print('\n\nLoading from %s.\n\n'%fname)
 
     model = torch.load(fname)    
@@ -54,8 +56,8 @@ def run():
     from purplerl.spinup.utils.run_utils import setup_logger_kwargs
 
     seed = 0
-    exp_name = "RobotArmTest"
-    env_name = "RobotArm"
+    exp_name = "WorkbookTest"
+    env_name = "Workbook"
     batch_size = 4
     buffer_size = 550
     logger_kwargs = setup_logger_kwargs(exp_name, seed, data_dir=f"./{env_name}")
@@ -76,7 +78,12 @@ def run():
     )
 
 
-    #policy = load_pytorch_policy("/home/cthoens/code/UnityRL/robotarm/results/RobotArm/RobotArmTest/RobotArmTest_s0/", "resume")
+    trainer_checkpoint_dict = {}
+    resuming = os.path.exists(os.path.join("Workbook/WorkbookTest/WorkbookTest_s0/", "resume.pt"))
+    if resuming:
+        print("Resuming")
+        policy = load_pytorch_policy("Workbook/WorkbookTest/WorkbookTest_s0/", "resume.pt")
+        trainer_checkpoint_dict = joblib.load(osp.join("Workbook/WorkbookTest/WorkbookTest_s0/", "resume.pkl"))
 
     experience = MonoObsExperienceBuffer(
         batch_size, 
@@ -98,6 +105,8 @@ def run():
         policy_lr=1e-3,
         value_net_lr = 1e-3,
     )
+    if resuming:
+        policy_updater.from_checkpoint(trainer_checkpoint_dict)
 
     trainer = Trainer(logger_kwargs)
     trainer.run_training(
@@ -106,7 +115,8 @@ def run():
         policy= policy,
         policy_updater= policy_updater,
         epochs=50000,
-        save_freq=1000,
+        save_freq=100,
+        state_dict=trainer_checkpoint_dict
     )
 
 if __name__ == '__main__':

@@ -40,6 +40,9 @@ class EnvManager:
         """
         raise NotImplemented
 
+    def set_lesson(self, lesson):
+        return False
+
 ObsType = namedtuple('ObsType', ['training', 'goal', 'jointPos', 'goalPos', 'remaining'])
 
 class UnityEnvManager(EnvManager):
@@ -220,6 +223,15 @@ class GymEnvManager(EnvManager):
                 continue
             obs[index] = env.reset()
         return obs, rew, done, success
+
+    def set_lesson(self, lesson):
+        set_lesson = getattr(self.envs[0], "set_lesson", None)
+        if not callable(set_lesson):            
+            return False
+        
+        more_lessons = np.array([env.set_lesson(lesson) for env in self.envs])
+        assert(np.all(more_lessons == more_lessons[0]))
+        return more_lessons[0]
 
 
 class IdentityObsEncoder(torch.nn.Module):

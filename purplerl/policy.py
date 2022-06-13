@@ -209,5 +209,16 @@ class Vanilla(PolicyUpdater):
         stats = super().get_stats()
         stats["V-Loss"] = self.value_loss.item()
         return stats
-            
+
+    def get_checkpoint_dict(self):
+        return {            
+            'value_net_state_dict': self.value_net.state_dict(),
+            'value_net_optimizer_state_dict': self.value_optimizier.state_dict(),
+            'loss': self.value_loss,
+        }
+
+    def from_checkpoint(self, checkpoint):
+        self.value_net.load_state_dict(checkpoint['value_net_state_dict'])
+        self.value_optimizier.load_state_dict(checkpoint['value_net_optimizer_state_dict'])
+        self.value_loss = checkpoint['loss']         
         

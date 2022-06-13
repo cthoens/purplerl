@@ -90,11 +90,23 @@ class Trainer:
             policy_updater: PolicyUpdater,
             epochs=50,
             save_freq=20,
+            state_dict={}
         ):
         self.logger.setup_pytorch_saver(policy)
 
-        # collect experience
+        def save_checkpoint(name = None):
+            if not name:
+                name = epoch
+            state_dict = {
+                "epoch": epoch,
+                "lesson": lesson,
+            }
+            self.logger.save_state(state_dict | policy_updater.get_checkpoint_dict(), itr = name)
+
+        lesson = state_dict.get("lesson", 0)
+
         for epoch in range(epochs):
+            epoch += state_dict.get("epoch", 0)
             epoch_start_time = time.time()
             experience.reset()
             policy_updater.reset()
@@ -118,13 +130,17 @@ class Trainer:
                 mean_entropy = action_mean_entropy.mean()
 
             # train
-            policy_updater.update()
-            new_lr = 1e-3 *  math.exp(-2.0 * success_rate)
+            new_policy_lr = 3e-3 *  math.exp(-2.0 * success_rate)            
             for g in policy_updater.policy_optimizer.param_groups:
-                g['lr'] = new_lr
+                g['lr'] = new_policy_lr
+            new_vf_lr = 5e-4 *  math.exp(-2.0 * success_rate)
+            for g in policy_updater.value_optimizier.param_groups:
+                g['lr'] = new_vf_lr
+            
+            policy_updater.update()            
 
-            if (epoch % save_freq == 0) or (epoch == epochs-1):
-                self.logger.save_state({}, itr = epoch)
+            if (epoch > 0 and  epoch % save_freq == 0) or (epoch == epochs-1):
+                save_checkpoint()
 
             self.logger.log_tabular('Epoch', epoch)            
             log_dict = policy_updater.get_stats() | experience.get_stats()
@@ -137,11 +153,26 @@ class Trainer:
                 else: 
                     log_str += f"{name}: {value}; "
             
-            print(f"Epoch: {epoch:3}; {log_str} LR: {new_lr:.4e}; Entropy: {mean_entropy.item():.4e}")
+            print(f"Epoch: {epoch:3}; L: {lesson}; {log_str} P-LR: {new_policy_lr:.2e}; V-LR: {new_vf_lr:.2e}; Entropy: {mean_entropy.item():.2e}")
             self.logger.log_tabular('Time', time.time()-epoch_start_time)
             self.logger.log_tabular('AverageEntropy', mean_entropy.item())
             policy_updater.log(self.logger)
             self.logger.dump_tabular()
+
+            if success_rate == 1.0:
+                self.success_count += experience.ep_count
+                if (self.success_count > 200):
+                    save_checkpoint(f"lesson"+lesson)
+                    
+                    lesson += 1
+                    has_more_lessons = env_manager.set_lesson(lesson)
+                    if has_more_lessons:
+                        print("Starting next lesson")
+                    else:
+                        print("Training completed")
+                        return
+            else:
+                self.success_count = 0
 
 
 def run():
