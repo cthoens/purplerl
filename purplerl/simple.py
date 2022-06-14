@@ -130,10 +130,10 @@ class Trainer:
                 mean_entropy = action_mean_entropy.mean()
 
             # train
-            new_policy_lr = 3e-3 *  math.exp(-2.0 * success_rate)            
+            new_policy_lr = 3e-3 *  math.exp(-6.0 * success_rate)            
             for g in policy_updater.policy_optimizer.param_groups:
                 g['lr'] = new_policy_lr
-            new_vf_lr = 5e-4 *  math.exp(-2.0 * success_rate)
+            new_vf_lr = 5e-4 *  math.exp(-6.0 * success_rate)
             for g in policy_updater.value_optimizier.param_groups:
                 g['lr'] = new_vf_lr
             
