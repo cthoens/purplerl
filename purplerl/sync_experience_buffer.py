@@ -28,10 +28,10 @@ class ExperienceBufferBase:
         batch_size:int, 
         buffer_size: int, 
         act_shape: list[int],
-        gamma: float = 0.99
+        discount: float = 0.99
     ) -> None:
         # Saved parameters
-        self.gamma = gamma
+        self.discount = discount
         self.batch_size = batch_size
         self.buffer_size = buffer_size
 
@@ -48,7 +48,9 @@ class ExperienceBufferBase:
 
         # Stored data
         self.action = torch.zeros(batch_size, buffer_size, *act_shape, **tensor_args)
-        self.step_reward = np.zeros((batch_size, buffer_size), dtype=np.float32)
+        # The extra slot at the end of used in buffer_full()
+        self.step_reward_full = np.zeros((batch_size, buffer_size+1), dtype=np.float32)
+        self.step_reward = self.step_reward_full[:,:-1]
 
         # Calculated data
         self.discounted_reward = torch.zeros(batch_size, buffer_size, **tensor_args)
@@ -68,10 +70,7 @@ class ExperienceBufferBase:
             if not finished:
                 continue
 
-            ep_range = range(self.ep_start_index[batch], self.next_step_index)
-            discounted_reward = discount_cumsum(self.step_reward[batch, ep_range], self.gamma)
-            self.discounted_reward[batch, ep_range] = torch.tensor(np.array(discounted_reward), **tensor_args)
-
+            self._finish_path(batch)
 
             self.ep_start_index[batch] = self.next_step_index
             self.ep_return[self.ep_count] = self.ep_cum_reward[batch]
@@ -81,6 +80,24 @@ class ExperienceBufferBase:
                 if success[batch]:
                     self.ep_success_count += 1.0
             self.ep_count += 1
+
+    def buffer_full(self, last_state_value_estimate: torch.tensor):
+        assert(self.next_step_index == self.buffer_size)
+        for batch in range(self.batch_size):
+            # there is nothing to do if this batch just finished an episode
+            if self.ep_start_index[batch] == self.next_step_index:
+                continue
+
+            self._finish_path(batch, last_state_value_estimate[batch])
+
+    
+    def _finish_path(self, batch, last_state_value_estimate:float = 0.0):
+        self.step_reward_full[batch, self.next_step_index] = last_state_value_estimate
+        rew_range = range(self.ep_start_index[batch], self.next_step_index+1)
+        discounted_reward = discount_cumsum(self.step_reward_full[batch, rew_range], self.discount)
+        ep_range = range(self.ep_start_index[batch], self.next_step_index)
+        self.discounted_reward[batch, ep_range] = torch.tensor(np.array(discounted_reward[:-1]), **tensor_args)
+ 
 
     # clears the entire buffer
     def reset(self):

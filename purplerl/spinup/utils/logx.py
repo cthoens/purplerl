@@ -6,6 +6,7 @@ Logs to a tab-separated-values file (path/to/output_directory/progress.txt)
 
 """
 import json
+import pathlib
 import joblib
 import numpy as np
 import torch
@@ -149,6 +150,9 @@ class Logger:
         fname = 'vars.pkl' if itr is None else f'vars{itr}.pkl'
         try:
             joblib.dump(state_dict, osp.join(self.output_dir, fname))
+            link_fname = osp.join(self.output_dir, "resume.pkl")
+            pathlib.Path(link_fname).unlink(missing_ok=True)
+            os.symlink(dst=link_fname, src=fname)
         except:
             self.log('Warning: could not pickle state_dict.', color='red')
         if hasattr(self, 'tf_saver_elements'):
@@ -181,7 +185,6 @@ class Logger:
             "First have to setup saving with self.setup_pytorch_saver"
         fpath = self.output_dir
         fname = f"model{itr if itr is not None else ''}.pt"
-        fname = osp.join(fpath, fname)
         os.makedirs(fpath, exist_ok=True)
         with warnings.catch_warnings():
             warnings.simplefilter("ignore")
@@ -193,7 +196,12 @@ class Logger:
             # something different for your personal PyTorch project.
             # We use a catch_warnings() context to avoid the warnings about
             # not being able to save the source code.
-            torch.save(self.pytorch_saver_elements, fname)
+            torch.save(self.pytorch_saver_elements, osp.join(fpath, fname))
+        link_path = self.output_dir
+        link_name = f"resume.pt"
+        link_fname = osp.join(link_path, link_name)
+        pathlib.Path(link_fname).unlink(missing_ok=True)
+        os.symlink(dst=link_fname, src=fname)
 
 
     def dump_tabular(self, write_to_stdout=False):

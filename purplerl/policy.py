@@ -1,5 +1,6 @@
 import itertools
 from random import gammavariate
+from xml.dom import InvalidStateErr
 import numpy as np
 
 import gym
@@ -116,19 +117,30 @@ class PolicyUpdater:
     def log(self, logger):
         pass
 
-    def end_episode(self, finished_batches: torch.Tensor = None):
-        if finished_batches is None:
-            finished_batches = np.full(self.batch_size, True)
-
+    def end_episode(self, finished_batches: torch.Tensor):
         for batch, finished in enumerate(finished_batches):
             if not finished:
                 continue
+
+            if self.experience.next_step_index==self.experience.ep_start_index[batch]:
+                raise InvalidStateErr("policy_updater.end_episode must be called before experience_buffer.end_episode!")
 
             self._end_episode_batch(batch)
 
     def _end_episode_batch(self, batch: int):
         pass
 
+    def buffer_full(self, last_state_value_estimate: torch.tensor):
+        assert(self.experience.next_step_index == self.experience.buffer_size)
+        for batch in range(self.experience.batch_size):
+            #  there is nothing to do if this batch just finished an episode
+            if self.experience.ep_start_index[batch] == self.experience.next_step_index:
+                continue
+
+            self._finish_path_batch(batch, last_state_value_estimate[batch])
+
+    def _finish_path_batch(self, batch, last_state_value_estimate: float):
+        pass
 
     def reset(self):
         self.weight[...] = 0.0
@@ -139,6 +151,9 @@ class PolicyUpdater:
             self.policy_loss = self._policy_loss(obs=self.experience.obs, act=self.experience.action, weights=self.weight)
             self.policy_loss.backward()
             self.policy_optimizer.step()
+
+    def value_estimate(self, obs):
+        return self.value_net(obs).squeeze(-1)
 
     # make loss function whose gradient, for the right data, is policy gradient
     def _policy_loss(self, obs, act, weights):
@@ -190,19 +205,33 @@ class Vanilla(PolicyUpdater):
             self.value_loss.backward()
             self.value_optimizier.step()
 
+
     def _value_loss(self):
         return self.value_loss_function(self.value_net(self.experience.obs).squeeze(-1), self.experience.discounted_reward)
 
+
     def _end_episode_batch(self, batch: int):
+        self._finish_path_batch(batch)
+
+
+    def _finish_path_batch(self, batch, last_state_value_estimate: float = None):        
+        reached_terminal_state = last_state_value_estimate is None
         path_slice = range(self.experience.ep_start_index[batch], self.experience.next_step_index)
         rews = self.experience.step_reward[batch][path_slice]
         
         vals = np.zeros(len(path_slice)+1, dtype=np.float32)
         vals[:-1] = self.value_net(self.experience.obs[batch][path_slice]).squeeze(-1).cpu().numpy()
-        vals[-1] = 0.0
+        vals[-1] = last_state_value_estimate if not reached_terminal_state else 0.0
                 
-        deltas = rews + self.experience.gamma * vals[1:] - vals[:-1]
-        weight = discount_cumsum(deltas, self.experience.gamma * self.lam)
+        # estimated reward for state transition = estimated value of next state - estimated value of current state
+        next_state_value = vals[1:]
+        current_state_value = vals[:-1]
+        expected_rewards = self.experience.discount * next_state_value - current_state_value
+        # if the episode has reached a terminal state the last state has no next state. In this case use the value 
+        # of the last state as value estimate of the terminal state
+        if reached_terminal_state: expected_rewards[-1] = current_state_value[-1]
+        deltas = rews + expected_rewards
+        weight = discount_cumsum(deltas, self.experience.discount * self.lam)
         self.weight[batch][path_slice] = torch.tensor(np.array(weight), **tensor_args)
 
     def get_stats(self):

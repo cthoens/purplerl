@@ -79,11 +79,12 @@ def run():
 
 
     trainer_checkpoint_dict = {}
-    resuming = os.path.exists(os.path.join("Workbook/WorkbookTest/WorkbookTest_s0/", "resume.pt"))
+    checkpoint_path = f"{env_name}/{exp_name}/{exp_name}_s0/"
+    resuming = os.path.exists(os.path.join(checkpoint_path, "resume.pt"))
     if resuming:
         print("Resuming")
-        policy = load_pytorch_policy("Workbook/WorkbookTest/WorkbookTest_s0/", "resume.pt")
-        trainer_checkpoint_dict = joblib.load(osp.join("Workbook/WorkbookTest/WorkbookTest_s0/", "resume.pkl"))
+        policy = load_pytorch_policy(checkpoint_path, "resume.pt")
+        trainer_checkpoint_dict = joblib.load(osp.join(checkpoint_path, "resume.pkl"))
 
     experience = MonoObsExperienceBuffer(
         batch_size, 
@@ -115,7 +116,7 @@ def run():
         policy= policy,
         policy_updater= policy_updater,
         epochs=50000,
-        save_freq=100,
+        save_freq=50,
         state_dict=trainer_checkpoint_dict
     )
 

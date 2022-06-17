@@ -80,7 +80,7 @@ class WorkbookEnv(gym.Env):
             self.sheet = np.flip(self.sheet, axis=1)
         self.sheet = np.rot90(self.sheet, k = int(np.random.uniform(low=0.0, high=3.0 - 1e-7)))
 
-        self.steps_left = 150
+        self.steps_left = 100
         self.cursor_pos = np.array([64.0, 64.0], dtype=np.float32)
         self.cursor_vel = np.zeros((2, ), dtype=np.float32)
 
