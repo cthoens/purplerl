@@ -83,8 +83,8 @@ class ContinuousPolicy(StochasticPolicy):
             obs_encoder,
             mlp(sizes=list(obs_encoder.shape) + hidden_sizes + list(self.mean_net_output_shape))
         ).cuda()
-        log_std_init = -0.5 * np.ones(self.mean_net_output_shape, dtype=np.float32)
-        self.log_std = torch.nn.Parameter(torch.as_tensor(log_std_init)).cuda()
+        log_std_init = -0.5 * torch.ones(*self.mean_net_output_shape, **tensor_args)
+        self.register_parameter("log_std", torch.nn.Parameter(log_std_init, requires_grad=True).cuda())
 
     # make function to compute action distaction_spaceaction_spaceribution
     def action_dist(self, obs):
