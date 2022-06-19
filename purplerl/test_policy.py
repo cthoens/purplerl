@@ -5,7 +5,7 @@ import os.path as osp
 import torch
 from spinup import EpochLogger
 from spinup.utils.logx import restore_tf_graph
-from purplerl.simple import CategoricalPolicy, ContinuousPolicy
+from purplerl.trainer import CategoricalPolicy, ContinuousPolicy
 
 
 def load_policy_and_env(fpath, itr='last', deterministic=False):

@@ -1,5 +1,6 @@
 import itertools
 from random import gammavariate
+from typing import Callable
 from xml.dom import InvalidStateErr
 import numpy as np
 
@@ -94,19 +95,25 @@ class ContinuousPolicy(StochasticPolicy):
 
 
 class PolicyUpdater:
+    POLICY_LOSS = "Policy Loss"
+    POLICY_LR = "Policy LR"
+
     def __init__(self,
         policy: StochasticPolicy,
         experience: ExperienceBufferBase,
-        policy_lr: float = 1e-2,
+        policy_lr_scheduler: Callable[[], float],
         policy_epochs: int = 3
     ) -> None:
         self.policy = policy
         self.experience = experience
-        self.policy_optimizer = Adam(self.policy.parameters(), lr=policy_lr)
+        self.policy_lr_scheduler = policy_lr_scheduler
+        self.policy_optimizer = Adam(self.policy.parameters(), lr=policy_lr_scheduler())
         self.policy_loss = None
         self.policy_epochs = policy_epochs
+        self.stats = {}
 
         self.weight = torch.zeros(experience.batch_size, experience.buffer_size, **tensor_args)
+
 
     def step(self):
         """
@@ -114,8 +121,6 @@ class PolicyUpdater:
         """
         pass
 
-    def log(self, logger):
-        pass
 
     def end_episode(self, finished_batches: torch.Tensor):
         for batch, finished in enumerate(finished_batches):
@@ -144,13 +149,22 @@ class PolicyUpdater:
 
     def reset(self):
         self.weight[...] = 0.0
+        
+        for stat in self.stats.keys():
+            self.stats[stat] = None
 
     def update(self):
+        new_policy_lr = self.policy_lr_scheduler()
+        for g in self.policy_optimizer.param_groups:
+            g['lr'] = new_policy_lr
+        self.stats[self.POLICY_LR] = new_policy_lr
+
         for _ in range(self.policy_epochs):
             self.policy_optimizer.zero_grad()
             self.policy_loss = self._policy_loss(obs=self.experience.obs, act=self.experience.action, weights=self.weight)
             self.policy_loss.backward()
             self.policy_optimizer.step()
+        self.stats[self.POLICY_LOSS] = self.policy_loss.item()
 
     def value_estimate(self, obs):
         return self.value_net(obs).squeeze(-1)
@@ -159,11 +173,6 @@ class PolicyUpdater:
     def _policy_loss(self, obs, act, weights):
         logp = self.policy.action_dist(obs).log_prob(act).sum(-1)
         return -(logp * weights).mean()
-
-    def get_stats(self):
-        return {
-            "P-Loss": self.policy_loss.item()
-        }
 
 
 class RewardToGo(PolicyUpdater):
@@ -178,32 +187,42 @@ class RewardToGo(PolicyUpdater):
 
 
 class Vanilla(PolicyUpdater):
+    VALUE_FUNCTION_LOSS = "VF Loss"
+    VALUE_FUNCTION_LR = "VF LR"
+    
     def __init__(self,
         hidden_sizes: list,
         policy: StochasticPolicy,
         experience: ExperienceBufferBase,
-        policy_lr=1e-2,
-        value_net_lr = 1e-2,
+        policy_lr_scheduler: Callable[[], float],
+        value_net_lr_scheduler: Callable[[], float],
         lam: float = 0.95
     ) -> None:
-        super().__init__(policy, experience, policy_lr)
+        super().__init__(policy, experience, policy_lr_scheduler)
         self.lam = lam
+        self.value_net_lr_scheduler = value_net_lr_scheduler
         self.value_net = self.mean_net = nn.Sequential(
             policy.obs_encoder,
             mlp(list(policy.obs_encoder.shape) + hidden_sizes + [1])
         ).cuda()
-        self.value_optimizier = torch.optim.Adam(self.value_net.parameters(), lr = value_net_lr)
+        self.value_optimizer = torch.optim.Adam(self.value_net.parameters(), lr = value_net_lr_scheduler())
         self.value_loss_function = torch.nn.MSELoss()
         self.value_loss = 0.0
 
     def update(self):
         super().update()
 
+        new_value_net_lr = self.value_net_lr_scheduler()
+        for g in self.value_optimizer.param_groups:
+            g['lr'] = new_value_net_lr
+        self.stats[self.VALUE_FUNCTION_LR] = new_value_net_lr
+        
         for i in range(10):
-            self.value_optimizier.zero_grad()
+            self.value_optimizer.zero_grad()
             self.value_loss = self._value_loss()
             self.value_loss.backward()
-            self.value_optimizier.step()
+            self.value_optimizer.step()
+        self.stats[self.VALUE_FUNCTION_LOSS] = self.value_loss.item()
 
 
     def _value_loss(self):
@@ -234,20 +253,16 @@ class Vanilla(PolicyUpdater):
         weight = discount_cumsum(deltas, self.experience.discount * self.lam)
         self.weight[batch][path_slice] = torch.tensor(np.array(weight), **tensor_args)
 
-    def get_stats(self):
-        stats = super().get_stats()
-        stats["V-Loss"] = self.value_loss.item()
-        return stats
 
     def get_checkpoint_dict(self):
         return {            
             'value_net_state_dict': self.value_net.state_dict(),
-            'value_net_optimizer_state_dict': self.value_optimizier.state_dict(),
+            'value_net_optimizer_state_dict': self.value_optimizer.state_dict(),
             'loss': self.value_loss,
         }
 
     def from_checkpoint(self, checkpoint):
         self.value_net.load_state_dict(checkpoint['value_net_state_dict'])
-        self.value_optimizier.load_state_dict(checkpoint['value_net_optimizer_state_dict'])
+        self.value_optimizer.load_state_dict(checkpoint['value_net_optimizer_state_dict'])
         self.value_loss = checkpoint['loss']         
         

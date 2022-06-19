@@ -1,12 +1,14 @@
 import os
 import gym
+import math
+from purplerl.sync_experience_buffer import ExperienceBufferBase
 
 import torch
 from torch.nn import Conv2d, Sequential, BatchNorm2d, ReLU, MaxPool2d, Linear, Flatten
 
 import joblib
 
-from purplerl.simple import MonoObsExperienceBuffer, RewardToGo, Trainer
+from purplerl.trainer import MonoObsExperienceBuffer, RewardToGo, Trainer
 from purplerl.environment import GymEnvManager
 from purplerl.workbook_env import WorkbookEnv
 from purplerl.policy import ContinuousPolicy, Vanilla
@@ -60,12 +62,16 @@ def run():
     env_name = "Workbook"
     batch_size = 4
     buffer_size = 550
+    policy_lr_initial = 3e-3
+    policy_lr_decay = 2.0 
+    value_function_lr_initial = 1e-3
+    value_function_lr_decay = 2.0 
     logger_kwargs = setup_logger_kwargs(exp_name, seed, data_dir=f"./{env_name}")
 
     gym.envs.register(
         id='workbook-v0',
         entry_point='purplerl.workbook_env:WorkbookEnv',
-        max_episode_steps=150,
+        max_episode_steps=100,
         kwargs={},
     )
 
@@ -77,6 +83,12 @@ def run():
         action_space = env_manager.action_space
     )
 
+    def policy_lr_scheduler():
+        return policy_lr_initial *  math.exp(-policy_lr_decay * experience.stats[ExperienceBufferBase.SUCCESS_RATE])
+    
+    def value_net_lr_scheduler():
+        return value_function_lr_initial *  math.exp(-value_function_lr_decay * experience.stats[ExperienceBufferBase.SUCCESS_RATE])
+    
 
     trainer_checkpoint_dict = {}
     checkpoint_path = f"{env_name}/{exp_name}/{exp_name}_s0/"
@@ -100,25 +112,25 @@ def run():
     # )
 
     policy_updater = Vanilla(
-        policy=policy,
-        experience=experience,
-        hidden_sizes=[32, 32],
-        policy_lr=1e-3,
-        value_net_lr = 1e-3,
+        policy = policy,
+        experience = experience,
+        hidden_sizes = [32, 32],
+        policy_lr_scheduler = policy_lr_scheduler,
+        value_net_lr_scheduler = value_net_lr_scheduler
     )
     if resuming:
         policy_updater.from_checkpoint(trainer_checkpoint_dict)
 
-    trainer = Trainer(logger_kwargs)
-    trainer.run_training(
-        env_manager= env_manager,
-        experience= experience,
-        policy= policy,
-        policy_updater= policy_updater,
-        epochs=50000,
-        save_freq=50,
-        state_dict=trainer_checkpoint_dict
-    )
+    trainer = Trainer(
+        env_manager = env_manager,
+        experience = experience,
+        policy = policy,
+        policy_updater = policy_updater,
+        epochs = 50000,
+        save_freq = 50,
+        state_dict = trainer_checkpoint_dict,
+        logger_kwargs = logger_kwargs)
+    trainer.run_training()
 
 if __name__ == '__main__':
     run()

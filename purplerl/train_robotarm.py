@@ -1,7 +1,7 @@
 from mlagents_envs.side_channel.engine_configuration_channel import EngineConfig
 import torch
 
-from purplerl.simple import CategoricalPolicy, ExperienceBufferBase, RewardToGo, Trainer
+from purplerl.trainer import CategoricalPolicy, ExperienceBufferBase, RewardToGo, Trainer
 from purplerl.environment import UnityEnvManager, ObsType
 from purplerl.config import gpu
 

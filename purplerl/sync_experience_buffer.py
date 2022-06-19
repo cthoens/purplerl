@@ -1,3 +1,4 @@
+from sre_constants import SUCCESS
 import numpy as np
 import torch
 
@@ -24,6 +25,10 @@ def discount_cumsum(x, discount):
 
 
 class ExperienceBufferBase:
+    MEAN_RETURN = "Mean Return"
+    SUCCESS_RATE = "Success Rate"
+    EPISODE_COUNT = "Ep Count"
+    
     def __init__(self, 
         batch_size:int, 
         buffer_size: int, 
@@ -34,6 +39,11 @@ class ExperienceBufferBase:
         self.discount = discount
         self.batch_size = batch_size
         self.buffer_size = buffer_size
+        self.stats = {
+            self.MEAN_RETURN: 0.0,
+            self.SUCCESS_RATE: 0.0,
+            self.EPISODE_COUNT: 0
+        }
 
         # Overall statistics
         self.ep_count = 0
@@ -79,7 +89,9 @@ class ExperienceBufferBase:
                 self.ep_success_info_count += 1
                 if success[batch]:
                     self.ep_success_count += 1.0
+                self.stats[self.SUCCESS_RATE] = self.success_rate()
             self.ep_count += 1
+            self.stats[self.EPISODE_COUNT] = self.ep_count
 
     def buffer_full(self, last_state_value_estimate: torch.tensor):
         assert(self.next_step_index == self.buffer_size)
@@ -89,6 +101,7 @@ class ExperienceBufferBase:
                 continue
 
             self._finish_path(batch, last_state_value_estimate[batch])
+        self.stats[self.MEAN_RETURN] = self.mean_return()
 
     
     def _finish_path(self, batch, last_state_value_estimate:float = 0.0):
@@ -114,18 +127,18 @@ class ExperienceBufferBase:
         self.step_reward[...] = 0.0
         self.discounted_reward[...] = 0.0
 
+        # Reset stats
+        for stat in self.stats.keys():
+            self.stats[stat] = None
+        self.stats[self.SUCCESS_RATE] = 0
+        self.stats[self.EPISODE_COUNT] = 0
+
     def mean_return(self) -> float:
-        return self.ep_return[:self.ep_count].mean()
+        return self.ep_return[:self.ep_count].mean().item()
 
     def success_rate(self) -> float:
         return self.ep_success_count / self.ep_success_info_count
 
-    def get_stats(self):
-        return {
-            "Mean return": self.mean_return().item(),
-            "Success": self.success_rate(),
-            "Ep Count": self.ep_count 
-        }
 
 class MonoObsExperienceBuffer(ExperienceBufferBase):
     def __init__(self, batch_size:int, buffer_size: int, obs_shape: list[int], act_shape: list[int]) -> None:
