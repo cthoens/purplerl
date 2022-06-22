@@ -8,12 +8,11 @@ import torch
 
 from gym.spaces import Discrete, MultiDiscrete, Box
 
-from purplerl.spinup.utils.logx import EpochLogger
 from purplerl.environment import EnvManager, GymEnvManager, IdentityObsEncoder
 from purplerl.sync_experience_buffer import ExperienceBufferBase, MonoObsExperienceBuffer
 from purplerl.policy import StochasticPolicy, CategoricalPolicy, ContinuousPolicy
 from purplerl.policy import PolicyUpdater, RewardToGo, Vanilla
-from purplerl.config import gpu
+from purplerl.config import device
 
 
 class Algo(Enum):
@@ -22,7 +21,7 @@ class Algo(Enum):
 
 
 def to_tensor(input: np.ndarray) -> torch.tensor:
-        return torch.as_tensor(input, dtype=torch.float32, device=gpu)
+        return torch.as_tensor(input, dtype=torch.float32, device=device)
 
 
 class GymTrainer(Trainer):
@@ -99,13 +98,10 @@ def run():
 
     args = parser.parse_args()
 
-    from purplerl.spinup.utils.run_utils import setup_logger_kwargs
-
     for i in range(6):
         seed = i*500
 
-        logger_kwargs = setup_logger_kwargs(args.exp_name, seed, data_dir=f"./{args.env_name}")
-        trainer = Trainer(logger_kwargs)
+        trainer = Trainer()
 
         trainer.train(env=args.env_name, algo=args.algo, epochs=args.epochs, policy_lr=args.lr, value_net_lr=args.value_lr, seed=seed)
 

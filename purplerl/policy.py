@@ -13,7 +13,7 @@ from torch.distributions.categorical import Categorical
 from torch.distributions.normal import Normal
 from torch.optim import Adam
 
-from purplerl.config import tensor_args
+from purplerl.config import device, tensor_args
 from purplerl.sync_experience_buffer import ExperienceBufferBase, discount_cumsum
 
 
@@ -27,11 +27,18 @@ def mlp(sizes, activation=nn.Tanh, output_activation=nn.Identity):
 
 
 class StochasticPolicy(nn.Module):
+    def __init__(self, obs_encoder: torch.nn.Sequential):
+        super().__init__()
+        self.obs_encoder = obs_encoder
+
     def action_dist(self, obs) -> torch.tensor:
         raise NotImplemented
 
     def act(self, obs) -> torch.tensor:
         return self.action_dist(obs).sample()
+
+    def checkpoint(self):
+        return {}
 
 
 class CategoricalPolicy(StochasticPolicy):
@@ -40,7 +47,7 @@ class CategoricalPolicy(StochasticPolicy):
         hidden_sizes: list[int],
         action_space: gym.Space
     ) -> None:
-        super().__init__()
+        super().__init__(obs_encoder)
 
         if isinstance(action_space, Discrete):
             # A discrete action shpace has one action that can take n possible values
@@ -58,11 +65,11 @@ class CategoricalPolicy(StochasticPolicy):
         else:
             raise Exception("Unsupported action space")
 
-        self.obs_encoder = obs_encoder
         self.logits_net = nn.Sequential(
-            obs_encoder,
+            self.obs_encoder,
             mlp(sizes = list(obs_encoder.shape) + hidden_sizes + [np.prod(self.distribution_input_shape)] ),
-        ).cuda()
+        ).to(device)
+
 
     # make function to compute action distribution
     def action_dist(self, obs):
@@ -70,28 +77,49 @@ class CategoricalPolicy(StochasticPolicy):
         logits = logits.reshape(list(logits.shape[:-1]) + self.distribution_input_shape)
         return Categorical(logits=logits)
 
+
+    def checkpoint(self):
+        return super().get_checkpoint_dict() | {
+            'logits_net_state_dict': self.logits_net.state_dict(),
+        }
+
+
+    def load_checkpoint(self, checkpoint):
+        self.logits_net.load_state_dict(checkpoint['logits_net_state_dict'])
+
 class ContinuousPolicy(StochasticPolicy):
     def __init__(self,
         obs_encoder: torch.nn.Module,
         hidden_sizes: list[int],
         action_space: list[int]
     ) -> None:
-        super().__init__()
+        super().__init__(obs_encoder)
         self.mean_net_output_shape = action_space.shape
         self.action_shape = action_space.shape
-        self.obs_encoder = obs_encoder
         self.mean_net = nn.Sequential(
-            obs_encoder,
+            self.obs_encoder,
             mlp(sizes=list(obs_encoder.shape) + hidden_sizes + list(self.mean_net_output_shape))
-        ).cuda()
+        ).to(device)
         log_std_init = -0.5 * torch.ones(*self.mean_net_output_shape, **tensor_args)
-        self.register_parameter("log_std", torch.nn.Parameter(log_std_init, requires_grad=True).cuda())
+        self.register_parameter("log_std", torch.nn.Parameter(log_std_init, requires_grad=True).to(device))
+
 
     # make function to compute action distaction_spaceaction_spaceribution
     def action_dist(self, obs):
         dist_mean = self.mean_net(obs)
         dist_std = torch.exp(self.log_std)
         return Normal(loc=dist_mean, scale=dist_std)
+
+
+    def checkpoint(self):
+        return super().state_dict() | {
+            'mean_net_state_dict': self.mean_net.state_dict(),
+        }
+
+
+    def load_checkpoint(self, checkpoint):
+        self.mean_net.load_state_dict(checkpoint['mean_net_state_dict'])
+
 
 
 class PolicyUpdater:
@@ -161,7 +189,7 @@ class PolicyUpdater:
 
         for _ in range(self.policy_epochs):
             self.policy_optimizer.zero_grad()
-            self.policy_loss = self._policy_loss(obs=self.experience.obs, act=self.experience.action, weights=self.weight)
+            self.policy_loss = self._policy_loss()
             self.policy_loss.backward()
             self.policy_optimizer.step()
         self.stats[self.POLICY_LOSS] = self.policy_loss.item()
@@ -170,9 +198,24 @@ class PolicyUpdater:
         return self.value_net(obs).squeeze(-1)
 
     # make loss function whose gradient, for the right data, is policy gradient
-    def _policy_loss(self, obs, act, weights):
+    def _policy_loss(self):
+        obs=self.experience.obs 
+        act=self.experience.action 
+        weights=self.weight
         logp = self.policy.action_dist(obs).log_prob(act).sum(-1)
         return -(logp * weights).mean()
+
+    def checkpoint(self):
+        return {
+            'policy_optimizer_state_dict': self.value_optimizer.state_dict(),
+            'policy_loss': self.policy_loss,
+        }
+
+
+    def load_checkpoint(self, checkpoint):
+        self.value_optimizer.load_state_dict(checkpoint['policy_optimizer_state_dict'])
+        self.policy_loss.load_state_dict(checkpoint['policy_loss'])
+
 
 
 class RewardToGo(PolicyUpdater):
@@ -204,7 +247,7 @@ class Vanilla(PolicyUpdater):
         self.value_net = self.mean_net = nn.Sequential(
             policy.obs_encoder,
             mlp(list(policy.obs_encoder.shape) + hidden_sizes + [1])
-        ).cuda()
+        ).to(device)
         self.value_optimizer = torch.optim.Adam(self.value_net.parameters(), lr = value_net_lr_scheduler())
         self.value_loss_function = torch.nn.MSELoss()
         self.value_loss = 0.0
@@ -216,13 +259,20 @@ class Vanilla(PolicyUpdater):
         for g in self.value_optimizer.param_groups:
             g['lr'] = new_value_net_lr
         self.stats[self.VALUE_FUNCTION_LR] = new_value_net_lr
+
+        for p in self.policy.obs_encoder.parameters():
+            p.requires_grad=False
         
-        for i in range(10):
-            self.value_optimizer.zero_grad()
-            self.value_loss = self._value_loss()
-            self.value_loss.backward()
-            self.value_optimizer.step()
-        self.stats[self.VALUE_FUNCTION_LOSS] = self.value_loss.item()
+        try:
+            for i in range(10):
+                self.value_optimizer.zero_grad()
+                self.value_loss = self._value_loss()
+                self.value_loss.backward()
+                self.value_optimizer.step()
+            self.stats[self.VALUE_FUNCTION_LOSS] = self.value_loss.item()
+        finally:
+            for p in self.policy.obs_encoder.parameters():
+                p.requires_grad=True
 
 
     def _value_loss(self):
@@ -254,15 +304,16 @@ class Vanilla(PolicyUpdater):
         self.weight[batch][path_slice] = torch.tensor(np.array(weight), **tensor_args)
 
 
-    def get_checkpoint_dict(self):
-        return {            
+    def checkpoint(self):
+        return super().checkpoint() | {            
             'value_net_state_dict': self.value_net.state_dict(),
             'value_net_optimizer_state_dict': self.value_optimizer.state_dict(),
-            'loss': self.value_loss,
+            'value_net_loss': self.value_loss,
         }
 
-    def from_checkpoint(self, checkpoint):
+
+    def load_checkpoint(self, checkpoint):
         self.value_net.load_state_dict(checkpoint['value_net_state_dict'])
         self.value_optimizer.load_state_dict(checkpoint['value_net_optimizer_state_dict'])
-        self.value_loss = checkpoint['loss']         
-        
+        self.value_loss = checkpoint['value_net_loss']
+      

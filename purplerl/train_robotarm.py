@@ -3,7 +3,7 @@ import torch
 
 from purplerl.trainer import CategoricalPolicy, ExperienceBufferBase, RewardToGo, Trainer
 from purplerl.environment import UnityEnvManager, ObsType
-from purplerl.config import gpu
+from purplerl.config import device
 
 class RobotArmObsEncoder(torch.nn.Module):
     def __init__(self) -> None:
@@ -20,11 +20,11 @@ class ExperienceBufferEx(ExperienceBufferBase):
             buffer_size = buffer_size,
             act_shape = env.action_space.shape
         )
-        self.trainingObs = torch.zeros(self.batch_size, buffer_size, *env.trainingSpec.shape, dtype= torch.float32, device=gpu)
-        self.goalObs = torch.zeros(self.batch_size, buffer_size, *env.goalSpec.shape, dtype= torch.float32, device=gpu)
-        self.jointPosObs = torch.zeros(self.batch_size, buffer_size, *env.jointPosSpec.shape, dtype= torch.float32, device=gpu)
-        self.goalPosObs = torch.zeros(self.batch_size, buffer_size, *env.goalPosSpec.shape, dtype= torch.float32, device=gpu)
-        self.remainingObs = torch.zeros(self.batch_size, buffer_size, *env.remainigSpec.shape, dtype= torch.float32, device=gpu)
+        self.trainingObs = torch.zeros(self.batch_size, buffer_size, *env.trainingSpec.shape, dtype= torch.float32, device=device)
+        self.goalObs = torch.zeros(self.batch_size, buffer_size, *env.goalSpec.shape, dtype= torch.float32, device=device)
+        self.jointPosObs = torch.zeros(self.batch_size, buffer_size, *env.jointPosSpec.shape, dtype= torch.float32, device=device)
+        self.goalPosObs = torch.zeros(self.batch_size, buffer_size, *env.goalPosSpec.shape, dtype= torch.float32, device=device)
+        self.remainingObs = torch.zeros(self.batch_size, buffer_size, *env.remainigSpec.shape, dtype= torch.float32, device=device)
         self.obs = ObsType(
             training= self.trainingObs,
             goal= self.goalObs,
@@ -56,12 +56,9 @@ class ExperienceBufferEx(ExperienceBufferBase):
 
 def run():
 
-    from purplerl.spinup.utils.run_utils import setup_logger_kwargs
-
     seed = 0
     exp_name = "RobotArmTest"
     env_name = "RobotArm"
-    logger_kwargs = setup_logger_kwargs(exp_name, seed, data_dir=f"./{env_name}")
 
     env_manager= UnityEnvManager(
         file_name="/home/cthoens/code/UnityRL/ml-agents-robots/Builds/RobotArm.x86_64",
@@ -90,7 +87,7 @@ def run():
         buffer_size=1000
     )
 
-    trainer = Trainer(logger_kwargs)
+    trainer = Trainer()
     trainer.run_training(
         env_manager= env_manager,
         experience= experience,

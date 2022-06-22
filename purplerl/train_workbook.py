@@ -56,26 +56,30 @@ class WorkbenchObsEncoder(torch.nn.Module):
 
 def run():
     config = {
-        "policy_lr": 5e-5,
+        "policy_lr": 2.5e-4,
         "policy_lr_decay": 0.0 ,
-        "vf_lr": 5e-5,
-        "vf_lr_decay": 0.0 
+        "vf_lr": 2.5e-4,
+        "vf_lr_decay": 0.0,
+        "phase": "phase1"
     }
-    with wandb.init(project="Workbook-p2", config=config) as run:
-        run_training(run.name, **wandb.config)
+    #, mode="disabled"
+    with wandb.init(project="Workbook", config=config) as run:
+        project_name = run.project if run.project != "" else "Dev"
+        run_training(project_name, run.name, **wandb.config)
 
 def run_training(
+    project_name,
     exp_name,
     policy_lr,
     policy_lr_decay,
     vf_lr,
-    vf_lr_decay
-):
-    project_name = "Workbook"
-    phase_name = "phase2"
+    vf_lr_decay,
+    phase
+):  
     batch_size = 4
     buffer_size = 500
     epochs = 500
+    save_freq = 100
     
     gym.envs.register(
         id='workbook-v0',
@@ -99,26 +103,12 @@ def run_training(
     def value_net_lr_scheduler():
         return vf_lr *  math.exp(-vf_lr_decay * experience.stats[ExperienceBufferBase.SUCCESS_RATE])
 
-    trainer_checkpoint_dict = {}
-    checkpoint_path = f"{project_name}/"
-    resuming = os.path.exists(os.path.join(checkpoint_path, "resume.pt"))
-    if resuming:
-        print("Resuming")
-        policy = load_pytorch_policy(checkpoint_path, "resume.pt")
-        trainer_checkpoint_dict = joblib.load(osp.join(checkpoint_path, "resume.pkl"))
-
     experience = MonoObsExperienceBuffer(
         batch_size, 
         buffer_size, 
         env_manager.observation_space.shape, 
         policy.action_shape
     )
-
-    # policy_updater= RewardToGo(
-    #          policy=policy,
-    #          experience=experience,
-    #          policy_lr=1e-3,
-    # )
 
     policy_updater = Vanilla(
         policy = policy,
@@ -127,8 +117,6 @@ def run_training(
         policy_lr_scheduler = policy_lr_scheduler,
         value_net_lr_scheduler = value_net_lr_scheduler
     )
-    if resuming:
-        policy_updater.from_checkpoint(trainer_checkpoint_dict)
     wandb.watch(policy_updater.value_net)
 
     trainer = Trainer(
@@ -137,10 +125,20 @@ def run_training(
         policy = policy,
         policy_updater = policy_updater,
         epochs = epochs,
-        save_freq = 100,
-        output_dir= f"{project_name}/{phase_name}/{exp_name}",
-        state_dict = trainer_checkpoint_dict
+        save_freq = save_freq,
+        output_dir= f"{project_name}/{phase}/{exp_name}"
     )
+    
+    checkpoint_path = os.path.join(f"{project_name}", f"{phase}-resume.pt")    
+    if os.path.exists(checkpoint_path):
+        if os.path.islink(checkpoint_path):
+            print(f"Resuming from {checkpoint_path}[{os.readlink(checkpoint_path)}]")
+        else:
+            print(f"Resuming from {checkpoint_path}")
+        trainer.load_checkpoint(checkpoint_path)
+    else:
+        print("****\n**** Starting from scratch !!!\n****")
+
     trainer.run_training()
 
 if __name__ == '__main__':
