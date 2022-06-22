@@ -1,14 +1,15 @@
-import math
+import copy
 import time
-from enum import Enum
+import joblib
+import os
+import os.path as osp
+import pathlib
+import warnings
 
 import numpy as np
 import torch
-
-from gym.spaces import Discrete, MultiDiscrete, Box
-
-from purplerl.spinup.utils.logx import EpochLogger
-from purplerl.environment import EnvManager, GymEnvManager, IdentityObsEncoder
+import wandb
+from purplerl.environment import EnvManager
 from purplerl.sync_experience_buffer import ExperienceBufferBase, MonoObsExperienceBuffer
 from purplerl.policy import StochasticPolicy, CategoricalPolicy, ContinuousPolicy
 from purplerl.policy import PolicyUpdater, RewardToGo, Vanilla
@@ -34,18 +35,20 @@ class Trainer:
         policy_updater: PolicyUpdater,
         epochs=50,
         save_freq=20,
-        state_dict={},
-        logger_kwargs=dict()
+        output_dir="",
+        state_dict={}
     ) -> None:
         self.env_manager = env_manager
         self.experience = experience
         self.policy = policy
         self.policy_updater = policy_updater
         self.epochs=epochs
+        self.epoch=0
         self.save_freq=save_freq
         self.lesson = state_dict.get(self.LESSON, 0)
-        self.resume_epoch = state_dict.get(self.EPOCH, 0)
-        self.logger = EpochLogger(**logger_kwargs)
+        self.resume_epoch = state_dict.get(self.EPOCH, 0)+1
+        self.output_dir = output_dir
+        os.makedirs(output_dir)
         self.own_stats = {
             self.ENTROPY: -1.0 
         }
@@ -55,6 +58,25 @@ class Trainer:
             self.TRAINER: self.own_stats
         }
 
+    def save_state(self, state_dict, itr):
+        fname = 'vars.pkl' if itr is None else f'vars{itr}.pkl'
+        joblib.dump(state_dict, osp.join(self.output_dir, fname))
+        link_fname = osp.join(self.output_dir, "resume.pkl")
+        pathlib.Path(link_fname).unlink(missing_ok=True)
+        os.symlink(dst=link_fname, src=fname)
+        
+        fpath = self.output_dir
+        fname = f"model{itr}.pt"
+        os.makedirs(fpath, exist_ok=True)
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            torch.save(self.policy, osp.join(fpath, fname))
+        link_path = self.output_dir
+        link_name = f"resume.pt"
+        link_fname = osp.join(link_path, link_name)
+        pathlib.Path(link_fname).unlink(missing_ok=True)
+        os.symlink(dst=link_fname, src=fname)
+
     def save_checkpoint(self, name = None):
             if not name:
                 name = self.epoch
@@ -62,13 +84,11 @@ class Trainer:
                 self.EPOCH: self.epoch,
                 self.LESSON: self.lesson,
             }
-            self.logger.save_state(state_dict | self.policy_updater.get_checkpoint_dict(), itr = name)
+            self.save_state(state_dict | self.policy_updater.get_checkpoint_dict(), itr = name)
 
     def run_training(self):
-        self.logger.setup_pytorch_saver(self.policy)
-
-        for epoch in range(self.epochs):
-            epoch += self.resume_epoch
+        for self.epoch in range(self.epochs):
+            self.epoch += self.resume_epoch
             epoch_start_time = time.time()
             self.experience.reset()
             self.policy_updater.reset()
@@ -99,23 +119,19 @@ class Trainer:
             # train            
             self.policy_updater.update()            
 
-            if (epoch > 0 and  epoch % self.save_freq == 0) or (epoch == self.epochs-1):
+            if (self.epoch > 0 and  self.epoch % self.save_freq == 0) or (self.epoch == self.epochs-1):
                 self.save_checkpoint()
 
-            self.logger.log_tabular('Epoch', epoch)            
             log_str = ""
             for _, stats in self.all_stats.items():
-                for name, value in stats.items():
-                    self.logger.log_tabular(name, value)
-                
+                for name, value in stats.items():                
                     if type(value) == float:
                         log_str += f"{name}: {value:.4f}; "
                     else: 
                         log_str += f"{name}: {value}; "
             
-            print(f"Epoch: {epoch:3}; L: {self.lesson}; {log_str}")
-            self.logger.log_tabular('Time', time.time()-epoch_start_time)
-            self.logger.dump_tabular()
+            print(f"Epoch: {self.epoch:3}; L: {self.lesson}; {log_str}")
+            wandb.log(copy.deepcopy(self.all_stats), step=self.epoch)
 
             if success_rate == 1.0:
                 self.success_count += self.experience.ep_count

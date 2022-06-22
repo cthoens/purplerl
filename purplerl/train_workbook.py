@@ -5,6 +5,7 @@ from purplerl.sync_experience_buffer import ExperienceBufferBase
 
 import torch
 from torch.nn import Conv2d, Sequential, BatchNorm2d, ReLU, MaxPool2d, Linear, Flatten
+import wandb
 
 import joblib
 
@@ -54,20 +55,28 @@ class WorkbenchObsEncoder(torch.nn.Module):
 
 
 def run():
+    config = {
+        "policy_lr": 5e-5,
+        "policy_lr_decay": 0.0 ,
+        "vf_lr": 5e-5,
+        "vf_lr_decay": 0.0 
+    }
+    with wandb.init(project="Workbook-p2", config=config) as run:
+        run_training(run.name, **wandb.config)
 
-    from purplerl.spinup.utils.run_utils import setup_logger_kwargs
-
-    seed = 0
-    exp_name = "WorkbookTest"
-    env_name = "Workbook"
+def run_training(
+    exp_name,
+    policy_lr,
+    policy_lr_decay,
+    vf_lr,
+    vf_lr_decay
+):
+    project_name = "Workbook"
+    phase_name = "phase2"
     batch_size = 4
-    buffer_size = 550
-    policy_lr_initial = 3e-3
-    policy_lr_decay = 2.0 
-    value_function_lr_initial = 1e-3
-    value_function_lr_decay = 2.0 
-    logger_kwargs = setup_logger_kwargs(exp_name, seed, data_dir=f"./{env_name}")
-
+    buffer_size = 500
+    epochs = 500
+    
     gym.envs.register(
         id='workbook-v0',
         entry_point='purplerl.workbook_env:WorkbookEnv',
@@ -79,19 +88,19 @@ def run():
 
     policy= ContinuousPolicy(
         obs_encoder=WorkbenchObsEncoder(),
-        hidden_sizes=[32, 32, 32],
+        hidden_sizes=[64, 64],
         action_space = env_manager.action_space
     )
+    wandb.watch(policy)
 
     def policy_lr_scheduler():
-        return policy_lr_initial *  math.exp(-policy_lr_decay * experience.stats[ExperienceBufferBase.SUCCESS_RATE])
+        return policy_lr *  math.exp(-policy_lr_decay * experience.stats[ExperienceBufferBase.SUCCESS_RATE])
     
     def value_net_lr_scheduler():
-        return value_function_lr_initial *  math.exp(-value_function_lr_decay * experience.stats[ExperienceBufferBase.SUCCESS_RATE])
-    
+        return vf_lr *  math.exp(-vf_lr_decay * experience.stats[ExperienceBufferBase.SUCCESS_RATE])
 
     trainer_checkpoint_dict = {}
-    checkpoint_path = f"{env_name}/{exp_name}/{exp_name}_s0/"
+    checkpoint_path = f"{project_name}/"
     resuming = os.path.exists(os.path.join(checkpoint_path, "resume.pt"))
     if resuming:
         print("Resuming")
@@ -114,22 +123,24 @@ def run():
     policy_updater = Vanilla(
         policy = policy,
         experience = experience,
-        hidden_sizes = [32, 32],
+        hidden_sizes = [64, 64],
         policy_lr_scheduler = policy_lr_scheduler,
         value_net_lr_scheduler = value_net_lr_scheduler
     )
     if resuming:
         policy_updater.from_checkpoint(trainer_checkpoint_dict)
+    wandb.watch(policy_updater.value_net)
 
     trainer = Trainer(
         env_manager = env_manager,
         experience = experience,
         policy = policy,
         policy_updater = policy_updater,
-        epochs = 50000,
-        save_freq = 50,
-        state_dict = trainer_checkpoint_dict,
-        logger_kwargs = logger_kwargs)
+        epochs = epochs,
+        save_freq = 100,
+        output_dir= f"{project_name}/{phase_name}/{exp_name}",
+        state_dict = trainer_checkpoint_dict
+    )
     trainer.run_training()
 
 if __name__ == '__main__':
