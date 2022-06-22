@@ -1,18 +1,17 @@
 import os
 import gym
 import math
-from purplerl.sync_experience_buffer import ExperienceBufferBase
 
 import torch
 from torch.nn import Conv2d, Sequential, BatchNorm2d, ReLU, MaxPool2d, Linear, Flatten
 import wandb
 
-import joblib
 
-from purplerl.trainer import MonoObsExperienceBuffer, RewardToGo, Trainer
+from purplerl.sync_experience_buffer import ExperienceBufferBase
+from purplerl.trainer import MonoObsExperienceBuffer, Trainer
 from purplerl.environment import GymEnvManager
-from purplerl.workbook_env import WorkbookEnv
 from purplerl.policy import ContinuousPolicy, Vanilla
+from purplerl.config import device
 
 import os.path as osp
 
@@ -55,25 +54,48 @@ class WorkbenchObsEncoder(torch.nn.Module):
 
 
 def run():
-    config = {
-        "policy_lr": 2.5e-4,
-        "policy_lr_decay": 0.0 ,
-        "vf_lr": 2.5e-4,
-        "vf_lr_decay": 0.0,
-        "phase": "phase1"
+    phase_config = {
+        "phase1": {
+            "policy_lr": 2.5e-4,
+            "policy_epochs" : 3,
+            "policy_lr_decay": 0.0,
+            "vf_lr": 2.5e-4,
+            "vf_epochs": 10,
+            "vf_lr_decay": 0.0,
+            "discount": 0.99,
+            "adv_lambda": 0.95
+        },
+        "phase2": {
+            "policy_lr": 5e-5,
+            "policy_epochs" : 3,
+            "policy_lr_decay": 0.0,            
+            "vf_lr": 5e-5,
+            "vf_epochs": 10,
+            "vf_lr_decay": 0.0,
+            "discount": 0.99,
+            "adv_lambda": 0.95
+        }
     }
+    active_phase = "phase2"
+    config = phase_config[active_phase]
+    config["phase"] = active_phase
     #, mode="disabled"
     with wandb.init(project="Workbook", config=config) as run:
-        project_name = run.project if run.project != "" else "Dev"
+        project_name = run.project
+        if project_name=="": project_name = "Dev"
         run_training(project_name, run.name, **wandb.config)
 
 def run_training(
     project_name,
     exp_name,
     policy_lr,
+    policy_epochs,
     policy_lr_decay,
     vf_lr,
+    vf_epochs,
     vf_lr_decay,
+    discount,
+    adv_lambda,
     phase
 ):  
     batch_size = 4
@@ -94,7 +116,7 @@ def run_training(
         obs_encoder=WorkbenchObsEncoder(),
         hidden_sizes=[64, 64],
         action_space = env_manager.action_space
-    )
+    ).to(device)
     wandb.watch(policy)
 
     def policy_lr_scheduler():
@@ -107,7 +129,8 @@ def run_training(
         batch_size, 
         buffer_size, 
         env_manager.observation_space.shape, 
-        policy.action_shape
+        policy.action_shape,
+        discount
     )
 
     policy_updater = Vanilla(
@@ -115,7 +138,10 @@ def run_training(
         experience = experience,
         hidden_sizes = [64, 64],
         policy_lr_scheduler = policy_lr_scheduler,
-        value_net_lr_scheduler = value_net_lr_scheduler
+        vf_lr_scheduler = value_net_lr_scheduler,
+        policy_epochs = policy_epochs,
+        vf_epochs = vf_epochs,
+        lam = adv_lambda
     )
     wandb.watch(policy_updater.value_net)
 

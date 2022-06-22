@@ -99,9 +99,9 @@ class ContinuousPolicy(StochasticPolicy):
         self.mean_net = nn.Sequential(
             self.obs_encoder,
             mlp(sizes=list(obs_encoder.shape) + hidden_sizes + list(self.mean_net_output_shape))
-        ).to(device)
+        )
         log_std_init = -0.5 * torch.ones(*self.mean_net_output_shape, **tensor_args)
-        self.register_parameter("log_std", torch.nn.Parameter(log_std_init, requires_grad=True).to(device))
+        self.log_std = torch.nn.Parameter(log_std_init)
 
 
     # make function to compute action distaction_spaceaction_spaceribution
@@ -113,12 +113,13 @@ class ContinuousPolicy(StochasticPolicy):
 
     def checkpoint(self):
         return super().state_dict() | {
-            'mean_net_state_dict': self.mean_net.state_dict(),
+            'mean_net_state_dict': self.mean_net.state_dict()
         }
 
 
     def load_checkpoint(self, checkpoint):
         self.mean_net.load_state_dict(checkpoint['mean_net_state_dict'])
+        self.log_std.data = checkpoint['log_std']
 
 
 
@@ -238,24 +239,27 @@ class Vanilla(PolicyUpdater):
         policy: StochasticPolicy,
         experience: ExperienceBufferBase,
         policy_lr_scheduler: Callable[[], float],
-        value_net_lr_scheduler: Callable[[], float],
+        policy_epochs,
+        vf_lr_scheduler: Callable[[], float],
+        vf_epochs,
         lam: float = 0.95
     ) -> None:
-        super().__init__(policy, experience, policy_lr_scheduler)
+        super().__init__(policy, experience, policy_lr_scheduler, policy_epochs=policy_epochs)
         self.lam = lam
-        self.value_net_lr_scheduler = value_net_lr_scheduler
+        self.vf_lr_scheduler = vf_lr_scheduler
+        self.vf_epochs = vf_epochs
         self.value_net = self.mean_net = nn.Sequential(
             policy.obs_encoder,
             mlp(list(policy.obs_encoder.shape) + hidden_sizes + [1])
         ).to(device)
-        self.value_optimizer = torch.optim.Adam(self.value_net.parameters(), lr = value_net_lr_scheduler())
+        self.value_optimizer = torch.optim.Adam(self.value_net.parameters(), lr = vf_lr_scheduler())
         self.value_loss_function = torch.nn.MSELoss()
         self.value_loss = 0.0
 
     def update(self):
         super().update()
 
-        new_value_net_lr = self.value_net_lr_scheduler()
+        new_value_net_lr = self.vf_lr_scheduler()
         for g in self.value_optimizer.param_groups:
             g['lr'] = new_value_net_lr
         self.stats[self.VALUE_FUNCTION_LR] = new_value_net_lr
@@ -264,7 +268,7 @@ class Vanilla(PolicyUpdater):
             p.requires_grad=False
         
         try:
-            for i in range(10):
+            for i in range(self.vf_epochs):
                 self.value_optimizer.zero_grad()
                 self.value_loss = self._value_loss()
                 self.value_loss.backward()

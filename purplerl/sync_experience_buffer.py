@@ -141,8 +141,14 @@ class ExperienceBufferBase:
 
 
 class MonoObsExperienceBuffer(ExperienceBufferBase):
-    def __init__(self, batch_size:int, buffer_size: int, obs_shape: list[int], act_shape: list[int]) -> None:
-        super().__init__(batch_size, buffer_size, act_shape)
+    def __init__(self, 
+        batch_size:int, 
+        buffer_size: int, 
+        obs_shape: list[int], 
+        act_shape: list[int],
+        discount: float = 0.99
+    ) -> None:
+        super().__init__(batch_size, buffer_size, act_shape, discount)
         # Stored data
         self.obs = torch.zeros(batch_size, buffer_size, *obs_shape, **tensor_args)
 
