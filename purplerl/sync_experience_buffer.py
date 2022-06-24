@@ -65,7 +65,7 @@ class ExperienceBufferBase:
         # Calculated data
         self.discounted_reward = torch.zeros(batch_size, buffer_size, **tensor_args)
 
-    def step(self, obs: torch.Tensor, act: torch.Tensor, reward: torch.Tensor):
+    def step(self, act: torch.Tensor, reward: torch.Tensor):
         # Update in episode data
         self.ep_cum_reward += reward
 
@@ -156,7 +156,7 @@ class MonoObsExperienceBuffer(ExperienceBufferBase):
         self.obs[:,self.next_step_index] = obs
 
         # Note: Call after updating to prevent self.next_step_index from getting incremented too soon
-        super().step(obs, act, reward)
+        super().step(act, reward)
 
     # clears the entire buffer
     def reset(self):

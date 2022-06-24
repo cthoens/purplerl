@@ -1,14 +1,9 @@
-
-import math
 import os
-from re import TEMPLATE, template
-from typing import Optional, Tuple, Union
 
 import numpy as np
 
 import gym
-from gym import logger, spaces
-from gym.spaces import Box
+from gym.spaces import Box, Dict
 from gym.error import DependencyNotInstalled
 
 from PIL import Image, ImageOps
@@ -23,13 +18,19 @@ class WorkbookEnv(gym.Env):
     block_alpha = 200
     spawn_alpha = 254
     traverse_alpha = 255
-   
 
-    def __init__(self) -> None:
+    SHEET = "sheet"
+    POWER = "power"   
+    SHEET_OBS_SPACE = Box(float("-1"), float("1"), (1, 128, 128, ))
+    POWER_OBS_SPACE = Box(float("-1"), float("1"), (1, ))
+    ACTION_SPACE = Box(float("-1"), float("1"), (2, ))
+
+    def __init__(self, max_episode_steps) -> None:
         # Set these in ALL subclasses
         self.screen = None
         self.clock = None
         self.steps_left = None
+        self.max_episode_steps = max_episode_steps
         self.sheets = [
             ["l00-s01.png", "l00-s02.png", "l00-s03.png"],
             ["l01-s01.png", "l01-s02.png", "l01-s03.png", "l01-s04.png"],
@@ -56,8 +57,8 @@ class WorkbookEnv(gym.Env):
         self.cursor_pos = None
         self.cursor_vel = None
         
-        self.action_space = Box(float("-1"), float("1"), (2, ))
-        self.observation_space = Box(float("-inf"), float("inf"), (1, 128, 128, ))
+        self.action_space = self.ACTION_SPACE
+        self.observation_space = Box(float("-1"), float("1"), tuple(np.prod(np.array(self.SHEET_OBS_SPACE.shape)) + np.array(self.POWER_OBS_SPACE.shape)))
 
     def _load_template(self, name):
         with Image.open(os.path.join("/home/cthoens/code/UnityRL/purplerl/sheets/", name)) as image:
@@ -80,7 +81,7 @@ class WorkbookEnv(gym.Env):
             self.sheet = np.flip(self.sheet, axis=1)
         self.sheet = np.rot90(self.sheet, k = int(np.random.uniform(low=0.0, high=3.0 - 1e-7)))
 
-        self.steps_left = 100
+        self.steps_left = 80
         self.cursor_pos = np.array([64.0, 64.0], dtype=np.float32)
         self.cursor_vel = np.zeros((2, ), dtype=np.float32)
 
@@ -132,7 +133,9 @@ class WorkbookEnv(gym.Env):
         obs_slice = obs[cursor_dest_from[1] : cursor_dest_to[1], cursor_dest_from[0] : cursor_dest_to[0]]
         mask_slice = self.cursor_mask[cursor_src_from[1] : cursor_src_to[1], cursor_src_from[0] : cursor_src_to[0]]
         obs_slice[mask_slice] = ((230.0 / 127.5) - 1.0)
-        return obs.reshape(*self.observation_space.shape)
+        
+        power_obs = np.array([self.steps_left / self.max_episode_steps], np.float32)
+        return np.concatenate((obs.flatten(), power_obs))
 
     def _get_cursor_pos_int(self):
         return np.rint(self.cursor_pos).astype(np.int32)

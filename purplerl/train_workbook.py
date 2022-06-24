@@ -44,36 +44,44 @@ class WorkbenchObsEncoder(torch.nn.Module):
             Linear(4096, 64)
         )
 
-        self.shape: tuple[int, ...] = (64, )
+        self.shape: tuple[int, ...] = (65, )
 
     def forward(self, obs: torch.tensor):
-        old_shape = list(obs.shape)[:-3]
-        x = self.cnn_layers(obs.reshape(-1, 1, 128, 128))
-        
-        return x.reshape(*(old_shape + [64]))
+        # Note: obs can be of shape (batch_size, sheet_shape) or (batch_size, buffer_size, sheet_shape)
+        buffer_dims = list(obs.shape)[:-1]
+        sheet_obs = obs[...,:-1]        
+        power_obs = obs[...,-1:]
+        # flatten buffer dimensions since the cnn only accepts 3D or 4D input
+        x = self.cnn_layers(sheet_obs.reshape(-1, 1, 128, 128))
+        # restore the buffer dimension        
+        x = x.reshape(*(buffer_dims + [64]))
+
+        return torch.concat((x, power_obs), -1)
 
 
 def run():
     phase_config = {
         "phase1": {
-            "policy_lr": 2.5e-4,
+            "policy_lr": 1e-4,
             "policy_epochs" : 3,
             "policy_lr_decay": 0.0,
-            "vf_lr": 2.5e-4,
+            "vf_lr": 1e-4,
             "vf_epochs": 10,
             "vf_lr_decay": 0.0,
             "discount": 0.99,
-            "adv_lambda": 0.95
+            "adv_lambda": 0.95,
+            "max_episode_steps": 80
         },
         "phase2": {
-            "policy_lr": 5e-5,
+            "policy_lr": 1e-4,
             "policy_epochs" : 3,
-            "policy_lr_decay": 0.0,            
-            "vf_lr": 5e-5,
+            "policy_lr_decay": 0.0,
+            "vf_lr": 1e-4,
             "vf_epochs": 10,
             "vf_lr_decay": 0.0,
             "discount": 0.99,
-            "adv_lambda": 0.95
+            "adv_lambda": 0.95,
+            "max_episode_steps": 80
         }
     }
     active_phase = "phase2"
@@ -96,18 +104,20 @@ def run_training(
     vf_lr_decay,
     discount,
     adv_lambda,
+    max_episode_steps,
     phase
 ):  
     batch_size = 4
     buffer_size = 500
-    epochs = 500
+    epochs = 1000
     save_freq = 100
     
     gym.envs.register(
         id='workbook-v0',
         entry_point='purplerl.workbook_env:WorkbookEnv',
-        max_episode_steps=100,
-        kwargs={},
+        kwargs={
+            "max_episode_steps": max_episode_steps
+        },
     )
 
     env_manager= GymEnvManager('workbook-v0', batch_size=batch_size)
