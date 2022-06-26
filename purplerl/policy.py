@@ -137,7 +137,6 @@ class PolicyUpdater:
         self.experience = experience
         self.policy_lr_scheduler = policy_lr_scheduler
         self.policy_optimizer = Adam(self.policy.parameters(), lr=policy_lr_scheduler())
-        self.policy_loss = None
         self.policy_epochs = policy_epochs
         self.stats = {}
 
@@ -190,13 +189,13 @@ class PolicyUpdater:
 
         for _ in range(self.policy_epochs):
             self.policy_optimizer.zero_grad()
-            self.policy_loss = self._policy_loss()
-            self.policy_loss.backward()
+            policy_loss = self._policy_loss()
+            policy_loss.backward()
             self.policy_optimizer.step()
-        self.stats[self.POLICY_LOSS] = self.policy_loss.item()
+        self.stats[self.POLICY_LOSS] = policy_loss.item()
 
     def value_estimate(self, obs):
-        return self.value_net(obs).squeeze(-1)
+        raise NotImplemented()
 
     # make loss function whose gradient, for the right data, is policy gradient
     def _policy_loss(self):
@@ -208,15 +207,12 @@ class PolicyUpdater:
 
     def checkpoint(self):
         return {
-            'policy_optimizer_state_dict': self.value_optimizer.state_dict(),
-            'policy_loss': self.policy_loss,
+            'policy_optimizer_state_dict': self.policy_optimizer.state_dict()
         }
 
 
     def load_checkpoint(self, checkpoint):
-        self.value_optimizer.load_state_dict(checkpoint['policy_optimizer_state_dict'])
-        self.policy_loss.load_state_dict(checkpoint['policy_loss'])
-
+        self.policy_optimizer.load_state_dict(checkpoint['policy_optimizer_state_dict'])
 
 
 class RewardToGo(PolicyUpdater):
@@ -254,7 +250,7 @@ class Vanilla(PolicyUpdater):
         ).to(device)
         self.value_optimizer = torch.optim.Adam(self.value_net.parameters(), lr = vf_lr_scheduler())
         self.value_loss_function = torch.nn.MSELoss()
-        self.value_loss = 0.0
+
 
     def update(self):
         super().update()
@@ -278,6 +274,8 @@ class Vanilla(PolicyUpdater):
             for p in self.policy.obs_encoder.parameters():
                 p.requires_grad=True
 
+    def value_estimate(self, obs):
+        return self.value_net(obs).squeeze(-1)
 
     def _value_loss(self):
         return self.value_loss_function(self.value_net(self.experience.obs).squeeze(-1), self.experience.discounted_reward)
@@ -320,4 +318,93 @@ class Vanilla(PolicyUpdater):
         self.value_net.load_state_dict(checkpoint['value_net_state_dict'])
         self.value_optimizer.load_state_dict(checkpoint['value_net_optimizer_state_dict'])
         self.value_loss = checkpoint['value_net_loss']
-      
+
+
+class PPO(Vanilla):    
+    KL = "KL"
+    ENTROPY = "Entropy"
+    MAX_KL_REACHED = "Max KL Reached"
+    CLIP_FACTOR = "Clip Factor"
+    
+    def __init__(self,
+        hidden_sizes: list,
+        policy: StochasticPolicy,
+        experience: ExperienceBufferBase,
+        policy_lr_scheduler: Callable[[], float],
+        policy_epochs,
+        vf_lr_scheduler: Callable[[], float],
+        vf_epochs,
+        lam: float = 0.95,
+        clip_ratio: float = 0.2,
+        target_kl: float = 0.01,
+    ) -> None:
+        super().__init__(hidden_sizes, policy, experience, policy_lr_scheduler, policy_epochs, vf_lr_scheduler, vf_epochs, lam)
+        self.clip_ratio = clip_ratio
+        self.target_kl = target_kl
+
+
+    def update(self):
+        # Policy upgrade
+        self._update_policy()
+
+        # Value function upgrade
+        new_value_net_lr = self.vf_lr_scheduler()
+        for g in self.value_optimizer.param_groups:
+            g['lr'] = new_value_net_lr
+        self.stats[self.VALUE_FUNCTION_LR] = new_value_net_lr
+
+        for p in self.policy.obs_encoder.parameters():
+            p.requires_grad=False
+        
+        try:
+            for i in range(self.vf_epochs):
+                self.value_optimizer.zero_grad()
+                self.value_loss = self._value_loss()
+                self.value_loss.backward()
+                self.value_optimizer.step()
+            self.stats[self.VALUE_FUNCTION_LOSS] = self.value_loss.item()
+        finally:
+            for p in self.policy.obs_encoder.parameters():
+                p.requires_grad=True
+
+    def _update_policy(self):
+        new_policy_lr = self.policy_lr_scheduler()
+        for g in self.policy_optimizer.param_groups:
+            g['lr'] = new_policy_lr
+        self.stats[self.POLICY_LR] = new_policy_lr
+
+        obs=self.experience.obs 
+        act=self.experience.action
+        logp_old = self.policy.action_dist(obs).log_prob(act).sum(-1).detach()
+        
+        # Train policy with multiple steps of gradient descent
+        self.stats[self.MAX_KL_REACHED] = 0.0
+        for i in range(self.policy_epochs):
+            self.policy_optimizer.zero_grad()
+            policy_loss = self._policy_loss(logp_old)
+            if self.stats[self.KL] > 1.5 * self.target_kl:
+                self.stats[self.MAX_KL_REACHED] = 1.0
+                break
+            policy_loss.backward()
+            self.policy_optimizer.step()
+        self.stats[self.POLICY_LOSS] = policy_loss.item()
+
+
+    def _policy_loss(self, logp_old):
+        obs=self.experience.obs 
+        act=self.experience.action 
+        adv=self.weight
+
+        # Policy loss
+        action_dist = self.policy.action_dist(obs)
+        logp = action_dist.log_prob(act).sum(-1)
+        ratio = torch.exp(logp - logp_old)
+        clip_adv = torch.clamp(ratio, 1.0-self.clip_ratio, 1.0+self.clip_ratio) * adv
+
+        # Useful extra info
+        self.stats[self.KL] = (logp_old - logp).mean().item()
+        self.stats[self.ENTROPY] = action_dist.entropy().mean().item()
+        clipped = ratio.gt(1+self.clip_ratio) | ratio.lt(1-self.clip_ratio)
+        self.stats[self.CLIP_FACTOR] = torch.as_tensor(clipped, dtype=torch.float32).mean().item()
+
+        return -(torch.min(ratio * adv, clip_adv)).mean()

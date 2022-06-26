@@ -3,11 +3,10 @@ import os
 import numpy as np
 
 import gym
-from gym.spaces import Box, Dict
+from gym.spaces import Box
 from gym.error import DependencyNotInstalled
 
 from PIL import Image, ImageOps
-from torch import true_divide
 
 class WorkbookEnv(gym.Env):
 
@@ -31,13 +30,9 @@ class WorkbookEnv(gym.Env):
         self.clock = None
         self.steps_left = None
         self.max_episode_steps = max_episode_steps
-        self.sheets = [
-            ["l00-s01.png", "l00-s02.png", "l00-s03.png"],
-            ["l01-s01.png", "l01-s02.png", "l01-s03.png", "l01-s04.png"],
-            ["l02-s01.png", "l02-s02.png"],
-            ["l03-s01.png",],
-        ]
-        self.templates = [[self._load_template(sheet) for sheet in lesson] for lesson in self.sheets]
+        self.lesson_paths = ["l00", "l01", "l02", "l10", "l20", "l30"]
+        self.sheets = [self._get_sheets(lesson) for lesson in self.lesson_paths]
+        self.templates = [[self._load_template(lesson_path, sheet) for sheet in lesson] for lesson, lesson_path in zip(self.sheets, self.lesson_paths)]
         self.lesson = 0
         self.template = 0
         
@@ -60,20 +55,15 @@ class WorkbookEnv(gym.Env):
         self.action_space = self.ACTION_SPACE
         self.observation_space = Box(float("-1"), float("1"), tuple(np.prod(np.array(self.SHEET_OBS_SPACE.shape)) + np.array(self.POWER_OBS_SPACE.shape)))
 
-    def _load_template(self, name):
-        with Image.open(os.path.join("/home/cthoens/code/UnityRL/purplerl/sheets/", name)) as image:
-            template = np.array(ImageOps.grayscale(image), dtype=np.float32)
-            template /= 127.5
-            template -= 1.0
-        return template
 
     def set_lesson(self, lesson):
-        if lesson < len(self.lessons):
+        if lesson < len(self.lesson_paths):
             self.lesson = lesson
             return True
         else:
             return False
-    
+
+
     def reset(self):
         template_idx = int(np.random.uniform(low=0.0, high=len(self.templates[self.lesson]) - 1e-7))
         self.sheet = np.array(self.templates[self.lesson][template_idx])
@@ -81,16 +71,15 @@ class WorkbookEnv(gym.Env):
             self.sheet = np.flip(self.sheet, axis=1)
         self.sheet = np.rot90(self.sheet, k = int(np.random.uniform(low=0.0, high=3.0 - 1e-7)))
 
-        self.steps_left = 80
-        self.cursor_pos = np.array([64.0, 64.0], dtype=np.float32)
+        self.steps_left = self.max_episode_steps
         self.cursor_vel = np.zeros((2, ), dtype=np.float32)
 
-        for _ in range(100):
-            self.cursor_pos = np.random.uniform(low=0.0, high=127.0, size=2).astype(np.float32)
-            if self._get_pixel() == 1.0:
-                return self._get_obs()
+        spawn_points = self._get_spawn_points(self.sheet)
+        idx = np.unravel_index(spawn_points[np.random.randint(low=0, high=len(spawn_points), size=1)[0]], self.SHEET_OBS_SPACE.shape)
+        self.cursor_pos = idx[1:]
+        assert(self._get_pixel() == 1.0)
+        return self._get_obs()
 
-        raise Exception("Could not find start")
 
     def step(self, action):
         assert self.cursor_pos is not None, "Call reset before using step method."
@@ -130,8 +119,8 @@ class WorkbookEnv(gym.Env):
         
         cursor_dest_from = np.maximum(cursor_dest_from, 0)
 
-        obs_slice = obs[cursor_dest_from[1] : cursor_dest_to[1], cursor_dest_from[0] : cursor_dest_to[0]]
-        mask_slice = self.cursor_mask[cursor_src_from[1] : cursor_src_to[1], cursor_src_from[0] : cursor_src_to[0]]
+        obs_slice = obs[cursor_dest_from[0] : cursor_dest_to[0], cursor_dest_from[1] : cursor_dest_to[1]]
+        mask_slice = self.cursor_mask[cursor_src_from[0] : cursor_src_to[0], cursor_src_from[1] : cursor_src_to[1]]
         obs_slice[mask_slice] = ((230.0 / 127.5) - 1.0)
         
         power_obs = np.array([self.steps_left / self.max_episode_steps], np.float32)
@@ -143,7 +132,7 @@ class WorkbookEnv(gym.Env):
 
     def _get_pixel(self):
         pos = self._get_cursor_pos_int()
-        return self.sheet[pos[1], pos[0]]
+        return self.sheet[pos[0], pos[1]]
 
 
     def render(self, mode="human"):
@@ -164,7 +153,7 @@ class WorkbookEnv(gym.Env):
         if self.clock is None:
             self.clock = pygame.time.Clock()
 
-        image = self._get_obs()
+        image = self._get_obs()[:-1].reshape(self.SHEET_OBS_SPACE.shape)
         image += 1.0
         image *= 127.5
         surf = pygame.surfarray.make_surface(image.astype(np.uint8).squeeze().swapaxes(0, 1))        
@@ -182,12 +171,30 @@ class WorkbookEnv(gym.Env):
         else:
             return True
 
+    def _load_template(self, lesson_path, name):
+        with Image.open(os.path.join("sheets", lesson_path,  name)) as image:
+            template = np.array(ImageOps.grayscale(image), dtype=np.float32)
+            template /= 127.5
+            template -= 1.0
+        return template
+
+    def _get_sheets(self, lesson):
+        path = os.path.join("sheets", lesson)
+        return [f for f in os.listdir(path) if os.path.isfile(os.path.join(path, f))]
+
+    def _get_spawn_points(self, template):
+        template = template.flatten()
+        return np.where(template == 1.0)[0]
+
 
 def test():
-    env = WorkbookEnv()
+    import time
+
+    env = WorkbookEnv(20)
     env.reset()
     for i in range(1000):
-        _, _, done, _ = env.step(np.array([-0.9, -0.1]))
+        time.sleep(0.2)
+        _, _, done, _ = env.step(np.array([0.9, 0.1]))
         if done:
             env.reset()
         env.render()

@@ -49,7 +49,8 @@ class Trainer:
         self.output_dir = output_dir
         os.makedirs(output_dir)
         self.own_stats = {
-            self.ENTROPY: -1.0 
+            self.ENTROPY: -1.0,
+            self.LESSON: 0 
         }
         self.all_stats = {
             self.EXPERIENCE: self.experience.stats,
@@ -108,10 +109,11 @@ class Trainer:
             if success_rate == 1.0:
                 self.success_count += self.experience.ep_count
                 if (self.success_count > 200):
-                    self.save_checkpoint(f"lesson"+lesson)
+                    self.save_checkpoint(f"lesson {self.lesson}.pt")
                     
-                    lesson += 1
-                    has_more_lessons = self.env_manager.set_lesson(lesson)
+                    self.lesson += 1
+                    self.own_stats[self.LESSON] = self.lesson
+                    has_more_lessons = self.env_manager.set_lesson(self.lesson)
                     if has_more_lessons:
                         print("Starting next lesson")
                     else:
@@ -120,7 +122,7 @@ class Trainer:
             else:
                 self.success_count = 0
 
-    def save_checkpoint(self):
+    def save_checkpoint(self, fname = None):
         full_state = {
             "policy": self.policy.checkpoint(),
             "policy_updater": self.policy_updater.checkpoint(),
@@ -128,7 +130,8 @@ class Trainer:
         } 
 
         fpath = self.output_dir
-        fname = f"checkpoint{self.epoch}.pt"
+        if not fname:
+            fname = f"checkpoint{self.epoch}.pt"
         os.makedirs(fpath, exist_ok=True)        
         torch.save(full_state, osp.join(fpath, fname))
 

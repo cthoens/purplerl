@@ -10,7 +10,7 @@ import wandb
 from purplerl.sync_experience_buffer import ExperienceBufferBase
 from purplerl.trainer import MonoObsExperienceBuffer, Trainer
 from purplerl.environment import GymEnvManager
-from purplerl.policy import ContinuousPolicy, Vanilla
+from purplerl.policy import ContinuousPolicy, Vanilla, PPO
 from purplerl.config import device
 
 import os.path as osp
@@ -62,29 +62,29 @@ class WorkbenchObsEncoder(torch.nn.Module):
 def run():
     phase_config = {
         "phase1": {
-            "policy_lr": 1e-4,
-            "policy_epochs" : 3,
+            "policy_lr": 2.5e-4,
+            "policy_epochs" : 20,
             "policy_lr_decay": 0.0,
-            "vf_lr": 1e-4,
+            "vf_lr": 2.5e-4,
             "vf_epochs": 10,
             "vf_lr_decay": 0.0,
             "discount": 0.99,
             "adv_lambda": 0.95,
-            "max_episode_steps": 80
+            "max_episode_steps": 20
         },
         "phase2": {
-            "policy_lr": 1e-4,
-            "policy_epochs" : 3,
+            "policy_lr": 5e-5,
+            "policy_epochs" : 6,
             "policy_lr_decay": 0.0,
-            "vf_lr": 1e-4,
+            "vf_lr": 5e-5,
             "vf_epochs": 10,
             "vf_lr_decay": 0.0,
             "discount": 0.99,
             "adv_lambda": 0.95,
-            "max_episode_steps": 80
+            "max_episode_steps": 20
         }
     }
-    active_phase = "phase2"
+    active_phase = "phase1"
     config = phase_config[active_phase]
     config["phase"] = active_phase
     #, mode="disabled"
@@ -105,7 +105,9 @@ def run_training(
     discount,
     adv_lambda,
     max_episode_steps,
-    phase
+    phase,
+    clip_ratio: float = 0.2,
+    target_kl: float = 0.01,
 ):  
     batch_size = 4
     buffer_size = 500
@@ -143,7 +145,7 @@ def run_training(
         discount
     )
 
-    policy_updater = Vanilla(
+    policy_updater = PPO(
         policy = policy,
         experience = experience,
         hidden_sizes = [64, 64],
@@ -151,7 +153,9 @@ def run_training(
         vf_lr_scheduler = value_net_lr_scheduler,
         policy_epochs = policy_epochs,
         vf_epochs = vf_epochs,
-        lam = adv_lambda
+        lam = adv_lambda,
+        clip_ratio = clip_ratio,
+        target_kl = target_kl,
     )
     wandb.watch(policy_updater.value_net)
 
@@ -162,10 +166,10 @@ def run_training(
         policy_updater = policy_updater,
         epochs = epochs,
         save_freq = save_freq,
-        output_dir= f"{project_name}/{phase}/{exp_name}"
+        output_dir= f"results/{project_name}/{phase}/{exp_name}"
     )
     
-    checkpoint_path = os.path.join(f"{project_name}", f"{phase}-resume.pt")    
+    checkpoint_path = os.path.join(f"results/{project_name}", f"{phase}-resume.pt")    
     if os.path.exists(checkpoint_path):
         if os.path.islink(checkpoint_path):
             print(f"Resuming from {checkpoint_path}[{os.readlink(checkpoint_path)}]")
