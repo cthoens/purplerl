@@ -12,7 +12,7 @@ import wandb
 from purplerl.environment import EnvManager
 from purplerl.sync_experience_buffer import ExperienceBufferBase, MonoObsExperienceBuffer
 from purplerl.policy import StochasticPolicy, CategoricalPolicy, ContinuousPolicy
-from purplerl.policy import PolicyUpdater, RewardToGo, Vanilla
+from purplerl.policy import PolicyUpdater, Vanilla
 from purplerl.config import device
 
 
@@ -45,6 +45,7 @@ class Trainer:
         self.epoch=0
         self.save_freq=save_freq
         self.lesson = 0
+        self.success_count = 0
         self.resume_epoch = 1 # have epochs start at 1 and not 0
         self.output_dir = output_dir
         os.makedirs(output_dir)
@@ -60,6 +61,8 @@ class Trainer:
 
 
     def run_training(self):
+        max_episode_count = 0
+        max_episode_epoch = 0
         for self.epoch in range(self.epochs):
             self.epoch += self.resume_epoch
             epoch_start_time = time.time()
@@ -90,7 +93,7 @@ class Trainer:
             
             
             # train            
-            self.policy_updater.update()            
+            self.policy_updater.update()
 
             if (self.epoch > 0 and  self.epoch % self.save_freq == 0) or (self.epoch == self.epochs):
                 self.save_checkpoint()
@@ -106,18 +109,25 @@ class Trainer:
             print(f"Epoch: {self.epoch:3}; L: {self.lesson}; {log_str}")
             wandb.log(copy.deepcopy(self.all_stats), step=self.epoch)
 
-            if success_rate == 1.0:
+            if self.experience.ep_count > max_episode_count:
+                max_episode_count = self.experience.ep_count
+                max_episode_epoch = self.epoch
+
+
+            if success_rate == 1.0 and self.epoch - max_episode_epoch > 4:
                 self.success_count += self.experience.ep_count
-                if (self.success_count > 200):
+                if (self.success_count > 500):
+                    self.lesson += 1
+                    max_episode_count = 0
+                    max_episode_epoch = self.epoch
+                    self.own_stats[self.LESSON] = self.lesson
                     self.save_checkpoint(f"lesson {self.lesson}.pt")
                     
-                    self.lesson += 1
-                    self.own_stats[self.LESSON] = self.lesson
                     has_more_lessons = self.env_manager.set_lesson(self.lesson)
                     if has_more_lessons:
-                        print("Starting next lesson")
+                        print(f"Starting lesson {self.lesson}")
                     else:
-                        print("Training completed")
+                        print(f"Training completed")
                         return
             else:
                 self.success_count = 0
@@ -145,8 +155,11 @@ class Trainer:
         self.policy.load_checkpoint(checkpoint["policy"])
         self.policy_updater.load_checkpoint(checkpoint["policy_updater"])
         trainer_state = checkpoint["trainer"]
-        self.lesson = trainer_state.get(self.LESSON, 0)
         self.resume_epoch = trainer_state.get(self.EPOCH, 0)+1
+        
+        self.lesson = trainer_state.get(self.LESSON, 0)
+        self.env_manager.set_lesson(self.lesson)
+        self.own_stats[self.LESSON] = self.lesson
 
     def checkpoint(self):        
         state_dict = {

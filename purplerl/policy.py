@@ -1,6 +1,6 @@
 import itertools
 from random import gammavariate
-from typing import Callable
+from typing import Callable, Tuple
 from xml.dom import InvalidStateErr
 import numpy as np
 
@@ -11,6 +11,8 @@ import torch
 import torch.nn as nn
 from torch.distributions.categorical import Categorical
 from torch.distributions.normal import Normal
+from torch.utils.data import TensorDataset, DataLoader
+
 from torch.optim import Adam
 
 from purplerl.config import device, tensor_args
@@ -94,20 +96,22 @@ class ContinuousPolicy(StochasticPolicy):
         action_space: list[int]
     ) -> None:
         super().__init__(obs_encoder)
-        self.mean_net_output_shape = action_space.shape
+        self.mean_net_output_shape = action_space.shape + (2, )
         self.action_shape = action_space.shape
         self.mean_net = nn.Sequential(
             self.obs_encoder,
-            mlp(sizes=list(obs_encoder.shape) + hidden_sizes + list(self.mean_net_output_shape))
+            mlp(sizes=list(obs_encoder.shape) + hidden_sizes + [np.prod(np.array(self.mean_net_output_shape))])
         )
-        log_std_init = -0.5 * torch.ones(*self.mean_net_output_shape, **tensor_args)
-        self.log_std = torch.nn.Parameter(log_std_init)
+        #log_std_init = -0.5 * torch.ones(*self.mean_net_output_shape, **tensor_args)
+        #self.log_std = torch.nn.Parameter(log_std_init)
 
-
-    # make function to compute action distaction_spaceaction_spaceribution
+    
     def action_dist(self, obs):
-        dist_mean = self.mean_net(obs)
-        dist_std = torch.exp(self.log_std)
+        out = self.mean_net(obs)
+        shape = out.shape[:-1] + self.mean_net_output_shape
+        out = out.reshape(shape)
+        dist_mean = out[...,0]
+        dist_std = torch.exp(out[...,1])
         return Normal(loc=dist_mean, scale=dist_std)
 
 
@@ -119,7 +123,7 @@ class ContinuousPolicy(StochasticPolicy):
 
     def load_checkpoint(self, checkpoint):
         self.mean_net.load_state_dict(checkpoint['mean_net_state_dict'])
-        self.log_std.data = checkpoint['log_std']
+        #self.log_std.data = checkpoint['log_std']
 
 
 
@@ -140,7 +144,13 @@ class PolicyUpdater:
         self.policy_epochs = policy_epochs
         self.stats = {}
 
-        self.weight = torch.zeros(experience.batch_size, experience.buffer_size, **tensor_args)
+        self.weight = torch.zeros(experience.batch_size, experience.buffer_size, **experience.tensor_args)
+        self.logp_old = torch.zeros(experience.batch_size, experience.buffer_size, **tensor_args)
+
+        self.batch_size = 1
+        self.obs_loader = DataLoader(TensorDataset(self.experience.obs), batch_size=self.batch_size, pin_memory=True)
+        self.action_loader = DataLoader(TensorDataset(self.experience.action), batch_size=self.batch_size, pin_memory=True)
+        self.weight_loader = DataLoader(TensorDataset(self.weight), batch_size=self.batch_size, pin_memory=True)
 
 
     def step(self):
@@ -188,20 +198,23 @@ class PolicyUpdater:
         self.stats[self.POLICY_LR] = new_policy_lr
 
         for _ in range(self.policy_epochs):
+            loss_total = 0
+            batches = 0
             self.policy_optimizer.zero_grad()
-            policy_loss = self._policy_loss()
-            policy_loss.backward()
+            for obs, act, weights in zip(self.obs_loader, self.action_loader, self.weight_loader):
+                policy_loss = self._policy_loss(obs[0].to(device), act[0].to(device), weights[0].to(device))
+                policy_loss.backward()
+                loss_total += policy_loss
+                batches += 1
             self.policy_optimizer.step()
-        self.stats[self.POLICY_LOSS] = policy_loss.item()
+                
+        self.stats[self.POLICY_LOSS] = loss_total / batches
 
     def value_estimate(self, obs):
-        raise NotImplemented()
+        pass
 
     # make loss function whose gradient, for the right data, is policy gradient
-    def _policy_loss(self):
-        obs=self.experience.obs 
-        act=self.experience.action 
-        weights=self.weight
+    def _policy_loss(self, obs, act, weights):
         logp = self.policy.action_dist(obs).log_prob(act).sum(-1)
         return -(logp * weights).mean()
 
@@ -213,17 +226,6 @@ class PolicyUpdater:
 
     def load_checkpoint(self, checkpoint):
         self.policy_optimizer.load_state_dict(checkpoint['policy_optimizer_state_dict'])
-
-
-class RewardToGo(PolicyUpdater):
-    def __init__(self, 
-        policy: StochasticPolicy,
-        experience: ExperienceBufferBase,
-        policy_lr: float = 1e-2,
-        policy_epochs: int = 3        
-    ) -> None:
-        super().__init__(policy, experience, policy_lr, policy_epochs)
-        self.weight = self.experience.discounted_reward
 
 
 class Vanilla(PolicyUpdater):
@@ -251,10 +253,18 @@ class Vanilla(PolicyUpdater):
         self.value_optimizer = torch.optim.Adam(self.value_net.parameters(), lr = vf_lr_scheduler())
         self.value_loss_function = torch.nn.MSELoss()
 
+        self.discounted_reward_loader = torch.utils.data.DataLoader(TensorDataset(self.experience.discounted_reward), batch_size=1, pin_memory=True)
+
 
     def update(self):
         super().update()
 
+        self._update_value_function()
+
+    def value_estimate(self, obs):
+        return self.value_net(obs).squeeze(-1)
+
+    def _update_value_function(self):
         new_value_net_lr = self.vf_lr_scheduler()
         for g in self.value_optimizer.param_groups:
             g['lr'] = new_value_net_lr
@@ -265,20 +275,23 @@ class Vanilla(PolicyUpdater):
         
         try:
             for i in range(self.vf_epochs):
+                loss_total = 0
+                batches = 0
                 self.value_optimizer.zero_grad()
-                self.value_loss = self._value_loss()
-                self.value_loss.backward()
+                for obs, discounted_reward in zip(self.obs_loader, self.discounted_reward_loader):
+                    value_loss = self._value_loss(obs[0].to(device), discounted_reward[0].to(device))
+                    value_loss.backward()
+                    loss_total += value_loss.item()
+                    batches += 1
                 self.value_optimizer.step()
-            self.stats[self.VALUE_FUNCTION_LOSS] = self.value_loss.item()
+            self.stats[self.VALUE_FUNCTION_LOSS] = loss_total / batches
         finally:
             for p in self.policy.obs_encoder.parameters():
                 p.requires_grad=True
 
-    def value_estimate(self, obs):
-        return self.value_net(obs).squeeze(-1)
 
-    def _value_loss(self):
-        return self.value_loss_function(self.value_net(self.experience.obs).squeeze(-1), self.experience.discounted_reward)
+    def _value_loss(self, obs, discounted_reward):
+        return self.value_loss_function(self.value_net(obs).squeeze(-1), discounted_reward)
 
 
     def _end_episode_batch(self, batch: int):
@@ -291,7 +304,7 @@ class Vanilla(PolicyUpdater):
         rews = self.experience.step_reward[batch][path_slice]
         
         vals = np.zeros(len(path_slice)+1, dtype=np.float32)
-        vals[:-1] = self.value_net(self.experience.obs[batch][path_slice]).squeeze(-1).cpu().numpy()
+        vals[:-1] = self.value_net(self.experience.obs[batch][path_slice].to(device)).squeeze(-1).cpu().numpy()
         vals[-1] = last_state_value_estimate if not reached_terminal_state else 0.0
                 
         # estimated reward for state transition = estimated value of next state - estimated value of current state
@@ -303,21 +316,19 @@ class Vanilla(PolicyUpdater):
         if reached_terminal_state: expected_rewards[-1] = current_state_value[-1]
         deltas = rews + expected_rewards
         weight = discount_cumsum(deltas, self.experience.discount * self.lam)
-        self.weight[batch][path_slice] = torch.tensor(np.array(weight), **tensor_args)
+        self.weight[batch][path_slice] = torch.tensor(np.array(weight), **self.experience.tensor_args)
 
 
     def checkpoint(self):
         return super().checkpoint() | {            
             'value_net_state_dict': self.value_net.state_dict(),
-            'value_net_optimizer_state_dict': self.value_optimizer.state_dict(),
-            'value_net_loss': self.value_loss,
+            'value_net_optimizer_state_dict': self.value_optimizer.state_dict()
         }
 
 
     def load_checkpoint(self, checkpoint):
         self.value_net.load_state_dict(checkpoint['value_net_state_dict'])
         self.value_optimizer.load_state_dict(checkpoint['value_net_optimizer_state_dict'])
-        self.value_loss = checkpoint['value_net_loss']
 
 
 class PPO(Vanilla):    
@@ -346,26 +357,8 @@ class PPO(Vanilla):
     def update(self):
         # Policy upgrade
         self._update_policy()
+        self._update_value_function()
 
-        # Value function upgrade
-        new_value_net_lr = self.vf_lr_scheduler()
-        for g in self.value_optimizer.param_groups:
-            g['lr'] = new_value_net_lr
-        self.stats[self.VALUE_FUNCTION_LR] = new_value_net_lr
-
-        for p in self.policy.obs_encoder.parameters():
-            p.requires_grad=False
-        
-        try:
-            for i in range(self.vf_epochs):
-                self.value_optimizer.zero_grad()
-                self.value_loss = self._value_loss()
-                self.value_loss.backward()
-                self.value_optimizer.step()
-            self.stats[self.VALUE_FUNCTION_LOSS] = self.value_loss.item()
-        finally:
-            for p in self.policy.obs_encoder.parameters():
-                p.requires_grad=True
 
     def _update_policy(self):
         new_policy_lr = self.policy_lr_scheduler()
@@ -373,38 +366,61 @@ class PPO(Vanilla):
             g['lr'] = new_policy_lr
         self.stats[self.POLICY_LR] = new_policy_lr
 
-        obs=self.experience.obs 
-        act=self.experience.action
-        logp_old = self.policy.action_dist(obs).log_prob(act).sum(-1).detach()
+        batch_start = 0
+        for obs, act in zip(self.obs_loader, self.action_loader):
+            obs = obs[0].to(device)
+            act = act[0].to(device)
+            current_batch_size = obs.shape[0]
+            self.logp_old[batch_start: batch_start+current_batch_size, ...] = self.policy.action_dist(obs).log_prob(act).sum(-1).detach()
+            batch_start += current_batch_size
         
         # Train policy with multiple steps of gradient descent
-        self.stats[self.MAX_KL_REACHED] = 0.0
+        self.stats[self.MAX_KL_REACHED] = 0.0        
         for i in range(self.policy_epochs):
+            loss_total, kl_total, entropy_total, clip_factor_total = 0, 0, 0, 0
+            count = 0
+            batch_start = 0
             self.policy_optimizer.zero_grad()
-            policy_loss = self._policy_loss(logp_old)
-            if self.stats[self.KL] > 1.5 * self.target_kl:
-                self.stats[self.MAX_KL_REACHED] = 1.0
-                break
-            policy_loss.backward()
+            for obs, act, adv in zip(self.obs_loader, self.action_loader, self.weight_loader):
+                obs = obs[0].to(device)
+                act = act[0].to(device)
+                adv = adv[0].to(device)
+                current_batch_size = obs.shape[0]
+                logp_old = self.logp_old[batch_start: batch_start+current_batch_size]
+                batch_start += current_batch_size
+                
+                policy_loss, sum_kl, sum_entropy, sum_clip_factor = self._policy_loss(logp_old, obs, act, adv)
+                
+                loss_total += policy_loss.item()
+                kl_total += sum_kl
+                entropy_total += sum_entropy
+                clip_factor_total += sum_clip_factor
+                count += obs.shape[0] * obs.shape[1]
+                
+                if kl_total / count > 1.5 * self.target_kl:
+                    self.stats[self.MAX_KL_REACHED] = 1.0
+                    break
+                policy_loss.backward()
             self.policy_optimizer.step()
-        self.stats[self.POLICY_LOSS] = policy_loss.item()
+        
+        self.stats[self.KL] = kl_total / count
+        self.stats[self.ENTROPY] = entropy_total / count
+        self.stats[self.CLIP_FACTOR] = clip_factor_total / count
+        self.stats[self.POLICY_LOSS] = loss_total / count
 
 
-    def _policy_loss(self, logp_old):
-        obs=self.experience.obs 
-        act=self.experience.action 
-        adv=self.weight
-
+    def _policy_loss(self, logp_old, obs, act, adv) -> Tuple[torch.tensor, float, float, float]:
         # Policy loss
         action_dist = self.policy.action_dist(obs)
         logp = action_dist.log_prob(act).sum(-1)
         ratio = torch.exp(logp - logp_old)
         clip_adv = torch.clamp(ratio, 1.0-self.clip_ratio, 1.0+self.clip_ratio) * adv
-
-        # Useful extra info
-        self.stats[self.KL] = (logp_old - logp).mean().item()
-        self.stats[self.ENTROPY] = action_dist.entropy().mean().item()
+        loss = -(torch.min(ratio * adv, clip_adv)).mean()
+        
+        # Stats
+        sum_kl = (logp_old - logp).sum().item()
+        sum_entropy = action_dist.entropy().mean().item()
         clipped = ratio.gt(1+self.clip_ratio) | ratio.lt(1-self.clip_ratio)
-        self.stats[self.CLIP_FACTOR] = torch.as_tensor(clipped, dtype=torch.float32).mean().item()
-
-        return -(torch.min(ratio * adv, clip_adv)).mean()
+        sum_clip_factor = torch.as_tensor(clipped, dtype=torch.float32).sum().item()
+        
+        return loss, sum_kl, sum_entropy, sum_clip_factor

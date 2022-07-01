@@ -4,7 +4,6 @@ import torch
 
 import scipy.signal
 
-from purplerl.config import tensor_args
 
 def discount_cumsum(x, discount):
     """
@@ -33,12 +32,14 @@ class ExperienceBufferBase:
         batch_size:int, 
         buffer_size: int, 
         act_shape: list[int],
-        discount: float = 0.99
+        discount: float = 0.99,
+        tensor_args = {}
     ) -> None:
         # Saved parameters
         self.discount = discount
         self.batch_size = batch_size
         self.buffer_size = buffer_size
+        self.tensor_args = tensor_args
         self.stats = {
             self.MEAN_RETURN: 0.0,
             self.SUCCESS_RATE: 0.0,
@@ -57,13 +58,13 @@ class ExperienceBufferBase:
         self.ep_cum_reward = np.zeros(batch_size, dtype=np.float32)
 
         # Stored data
-        self.action = torch.zeros(batch_size, buffer_size, *act_shape, **tensor_args)
+        self.action = torch.zeros(batch_size, buffer_size, *act_shape, **self.tensor_args)
         # The extra slot at the end of used in buffer_full()
         self.step_reward_full = np.zeros((batch_size, buffer_size+1), dtype=np.float32)
         self.step_reward = self.step_reward_full[:,:-1]
 
         # Calculated data
-        self.discounted_reward = torch.zeros(batch_size, buffer_size, **tensor_args)
+        self.discounted_reward = torch.zeros(batch_size, buffer_size, **self.tensor_args)
 
     def step(self, act: torch.Tensor, reward: torch.Tensor):
         # Update in episode data
@@ -109,7 +110,7 @@ class ExperienceBufferBase:
         rew_range = range(self.ep_start_index[batch], self.next_step_index+1)
         discounted_reward = discount_cumsum(self.step_reward_full[batch, rew_range], self.discount)
         ep_range = range(self.ep_start_index[batch], self.next_step_index)
-        self.discounted_reward[batch, ep_range] = torch.tensor(np.array(discounted_reward[:-1]), **tensor_args)
+        self.discounted_reward[batch, ep_range] = torch.tensor(np.array(discounted_reward[:-1]), **self.tensor_args)
  
 
     # clears the entire buffer
@@ -146,11 +147,12 @@ class MonoObsExperienceBuffer(ExperienceBufferBase):
         buffer_size: int, 
         obs_shape: list[int], 
         act_shape: list[int],
-        discount: float = 0.99
+        discount: float = 0.99,
+        tensor_args: dict = {}
     ) -> None:
-        super().__init__(batch_size, buffer_size, act_shape, discount)
+        super().__init__(batch_size, buffer_size, act_shape, discount, tensor_args)
         # Stored data
-        self.obs = torch.zeros(batch_size, buffer_size, *obs_shape, **tensor_args)
+        self.obs = torch.zeros(batch_size, buffer_size, *obs_shape, **self.tensor_args)
 
     def step(self, obs: torch.Tensor, act: torch.Tensor, reward: torch.Tensor):
         self.obs[:,self.next_step_index] = obs

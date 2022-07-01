@@ -15,16 +15,6 @@ from purplerl.config import device
 
 import os.path as osp
 
-def load_pytorch_policy(fpath, name):
-    """ Load a pytorch policy saved with Spinning Up Logger."""
-
-    fname = osp.join(fpath, name)
-    print('\n\nLoading from %s.\n\n'%fname)
-
-    model = torch.load(fname)    
-
-    return model
-
 class WorkbenchObsEncoder(torch.nn.Module):
     def __init__(self) -> None:
         super().__init__()
@@ -62,26 +52,24 @@ class WorkbenchObsEncoder(torch.nn.Module):
 def run():
     phase_config = {
         "phase1": {
-            "policy_lr": 2.5e-4,
-            "policy_epochs" : 20,
-            "policy_lr_decay": 0.0,
+            "policy_lr": 1e-4,
             "vf_lr": 2.5e-4,
-            "vf_epochs": 10,
+            "policy_epochs" : 10,
+            "vf_epochs": 20,
+            "policy_lr_decay": 0.0,
             "vf_lr_decay": 0.0,
             "discount": 0.99,
-            "adv_lambda": 0.95,
-            "max_episode_steps": 20
+            "adv_lambda": 0.95
         },
         "phase2": {
-            "policy_lr": 5e-5,
-            "policy_epochs" : 6,
+            "policy_lr": 1e-4,
+            "vf_lr": 2.5e-4,
+            "policy_epochs" : 10,
+            "vf_epochs": 20,
             "policy_lr_decay": 0.0,
-            "vf_lr": 5e-5,
-            "vf_epochs": 10,
             "vf_lr_decay": 0.0,
             "discount": 0.99,
-            "adv_lambda": 0.95,
-            "max_episode_steps": 20
+            "adv_lambda": 0.95
         }
     }
     active_phase = "phase1"
@@ -104,21 +92,19 @@ def run_training(
     vf_lr_decay,
     discount,
     adv_lambda,
-    max_episode_steps,
     phase,
     clip_ratio: float = 0.2,
     target_kl: float = 0.01,
 ):  
-    batch_size = 4
-    buffer_size = 500
-    epochs = 1000
+    batch_size = 6
+    buffer_size = 1000
+    epochs = 500
     save_freq = 100
     
     gym.envs.register(
         id='workbook-v0',
         entry_point='purplerl.workbook_env:WorkbookEnv',
         kwargs={
-            "max_episode_steps": max_episode_steps
         },
     )
 
@@ -142,7 +128,11 @@ def run_training(
         buffer_size, 
         env_manager.observation_space.shape, 
         policy.action_shape,
-        discount
+        discount,
+        tensor_args = {
+            "dtype": torch.float32, 
+            "device": torch.device('cpu')
+        }
     )
 
     policy_updater = PPO(

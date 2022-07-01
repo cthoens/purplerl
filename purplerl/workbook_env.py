@@ -24,16 +24,19 @@ class WorkbookEnv(gym.Env):
     POWER_OBS_SPACE = Box(float("-1"), float("1"), (1, ))
     ACTION_SPACE = Box(float("-1"), float("1"), (2, ))
 
-    def __init__(self, max_episode_steps) -> None:
+    MAX_STEPS_TOTAL = 80
+
+    def __init__(self) -> None:
         # Set these in ALL subclasses
         self.screen = None
         self.clock = None
         self.steps_left = None
-        self.max_episode_steps = max_episode_steps
         self.lesson_paths = ["l00", "l01", "l02", "l10", "l20", "l30"]
+        self.lesson_lengths = [80, 80, 80, 80, 80, 80]
         self.sheets = [self._get_sheets(lesson) for lesson in self.lesson_paths]
         self.templates = [[self._load_template(lesson_path, sheet) for sheet in lesson] for lesson, lesson_path in zip(self.sheets, self.lesson_paths)]
         self.lesson = 0
+        self.max_episode_steps = self.lesson_lengths[self.lesson]
         self.template = 0
         
         self.cursor = np.array([
@@ -59,6 +62,7 @@ class WorkbookEnv(gym.Env):
     def set_lesson(self, lesson):
         if lesson < len(self.lesson_paths):
             self.lesson = lesson
+            self.max_episode_steps = self.lesson_lengths[lesson]
             return True
         else:
             return False
@@ -123,7 +127,7 @@ class WorkbookEnv(gym.Env):
         mask_slice = self.cursor_mask[cursor_src_from[0] : cursor_src_to[0], cursor_src_from[1] : cursor_src_to[1]]
         obs_slice[mask_slice] = ((230.0 / 127.5) - 1.0)
         
-        power_obs = np.array([self.steps_left / self.max_episode_steps], np.float32)
+        power_obs = np.array([self.steps_left / self.MAX_STEPS_TOTAL], np.float32)
         return np.concatenate((obs.flatten(), power_obs))
 
     def _get_cursor_pos_int(self):
