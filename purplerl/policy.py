@@ -1,5 +1,3 @@
-import itertools
-from random import gammavariate
 from typing import Callable, Tuple
 from xml.dom import InvalidStateErr
 import numpy as np
@@ -354,19 +352,15 @@ class PPO(Vanilla):
 
 
     def update(self):
-        # Policy upgrade
-        if self.vf_only_updates == 0:
-            self._update_policy()
-        else:
-            self.vf_only_updates -= 1
-        self._update_value_function()
-
-
-    def _update_policy(self):
         new_policy_lr = self.policy_lr_scheduler()
         for g in self.policy_optimizer.param_groups:
             g['lr'] = new_policy_lr
         self.stats[self.POLICY_LR] = new_policy_lr
+
+        new_value_net_lr = self.vf_lr_scheduler()
+        for g in self.value_optimizer.param_groups:
+            g['lr'] = new_value_net_lr
+        self.stats[self.VALUE_FUNCTION_LR] = new_value_net_lr
 
         batch_start = 0
         with torch.no_grad():
@@ -378,35 +372,63 @@ class PPO(Vanilla):
                 batch_start += current_batch_size
         
         # Train policy with multiple steps of gradient descent
+        max_kl_reached = False
         self.stats[self.MAX_KL_REACHED] = 0.0        
-        for i in range(self.policy_epochs):
-            loss_total, kl_total, entropy_total, clip_factor_total = 0, 0, 0, 0
-            loss_count, kl_count, entropy_count, clip_factor_count = 0, 0, 0, 0
-            self.policy_optimizer.zero_grad()
-            for obs, act, adv, logp_old in zip(self.obs_loader, self.action_loader, self.weight_loader, self.logp_old_loader):
+        for i in range(max(self.policy_epochs, self.vf_epochs)):
+            update_policy = self.vf_only_updates == 0 and i < self.policy_epochs and not max_kl_reached
+            self.vf_only_updates == max(self.vf_only_updates -1, 0)
+            if update_policy:
+                loss_total, kl_total, entropy_total, clip_factor_total = 0, 0, 0, 0
+                loss_count, kl_count, entropy_count, clip_factor_count = 0, 0, 0, 0
+                self.policy_optimizer.zero_grad()
+            for obs, act, adv, logp_old, discounted_reward in zip(self.obs_loader, self.action_loader, self.weight_loader, self.logp_old_loader, self.discounted_reward_loader):
+                # Policy updates                
                 obs = obs[0].to(device)
-                act = act[0].to(device)
-                adv = adv[0].to(device)
-                logp_old = logp_old[0].to(device)
-                
-                policy_loss, kl, entropy, clip_factor = self._policy_loss(logp_old, obs, act, adv)
-                
-                loss_total += policy_loss.sum().item()
-                loss_count += np.prod(policy_loss.shape)
-                kl_total += kl.sum().item()
-                kl_count += np.prod(kl.shape)
-                entropy_total += entropy.sum().item()
-                entropy_count += np.prod(entropy.shape)
-                clip_factor_total += clip_factor.sum().item()
-                clip_factor_count += np.prod(clip_factor.shape)
-                
-                if kl_total / kl_count > 1.5 * self.target_kl:
-                    self.stats[self.MAX_KL_REACHED] = 1.0
-                    break
-                
-                policy_loss.mean().backward()
-            self.policy_optimizer.step()
+                if update_policy and not max_kl_reached:
+                    act = act[0].to(device)
+                    adv = adv[0].to(device)
+                    logp_old = logp_old[0].to(device)
+
+                    policy_loss, kl, entropy, clip_factor = self._policy_loss(logp_old, obs, act, adv)
+
+                    loss_total += policy_loss.sum().item()
+                    loss_count += np.prod(policy_loss.shape)
+                    kl_total += kl.sum().item()
+                    kl_count += np.prod(kl.shape)
+                    entropy_total += entropy.sum().item()
+                    entropy_count += np.prod(entropy.shape)
+                    clip_factor_total += clip_factor.sum().item()
+                    clip_factor_count += np.prod(clip_factor.shape)
+
+                    if kl_total / kl_count.item() > 1.5 * self.target_kl:
+                        max_kl_reached = True
+                        self.stats[self.MAX_KL_REACHED] = 1.0
+                    else:                    
+                        policy_loss.mean().backward()
+
+                    act = None
+                    adv = None
+
+                # Value function update
+                if i < self.vf_epochs:
+                    for p in self.policy.obs_encoder.parameters():
+                        p.requires_grad=False
+                    
+                    try:
+                        self.value_optimizer.zero_grad()
+                        discounted_reward = discounted_reward[0].to(device)
+                        value_loss = self._value_loss(obs, discounted_reward)
+                        value_loss.backward()
+                        self.value_optimizer.step()
+                    finally:
+                        discounted_reward = None
+                        for p in self.policy.obs_encoder.parameters():
+                            p.requires_grad=True
+                                 
+            if update_policy:
+                self.policy_optimizer.step()
         
+        self.stats[self.VALUE_FUNCTION_LOSS] = value_loss.item()
         self.stats[self.KL] = kl_total / kl_count.item()
         self.stats[self.ENTROPY] = entropy_total / entropy_count.item()
         self.stats[self.CLIP_FACTOR] = clip_factor_total / clip_factor_count.item()
