@@ -145,7 +145,6 @@ class PolicyUpdater:
         self.stats = {}
 
         self.weight = torch.zeros(experience.batch_size, experience.buffer_size, **experience.tensor_args)
-        self.logp_old = torch.zeros(experience.batch_size, experience.buffer_size, **tensor_args)
 
         self.batch_size = 1
         self.obs_loader = DataLoader(TensorDataset(self.experience.obs), batch_size=self.batch_size, pin_memory=True)
@@ -198,17 +197,14 @@ class PolicyUpdater:
         self.stats[self.POLICY_LR] = new_policy_lr
 
         for _ in range(self.policy_epochs):
-            loss_total = 0
-            batches = 0
             self.policy_optimizer.zero_grad()
             for obs, act, weights in zip(self.obs_loader, self.action_loader, self.weight_loader):
                 policy_loss = self._policy_loss(obs[0].to(device), act[0].to(device), weights[0].to(device))
                 policy_loss.backward()
-                loss_total += policy_loss
                 batches += 1
             self.policy_optimizer.step()
-                
-        self.stats[self.POLICY_LOSS] = loss_total / batches
+
+        self.stats[self.POLICY_LOSS] = policy_loss.item()
 
     def value_estimate(self, obs):
         pass
@@ -253,7 +249,7 @@ class Vanilla(PolicyUpdater):
         self.value_optimizer = torch.optim.Adam(self.value_net.parameters(), lr = vf_lr_scheduler())
         self.value_loss_function = torch.nn.MSELoss()
 
-        self.discounted_reward_loader = torch.utils.data.DataLoader(TensorDataset(self.experience.discounted_reward), batch_size=1, pin_memory=True)
+        self.discounted_reward_loader = torch.utils.data.DataLoader(TensorDataset(self.experience.discounted_reward), batch_size=self.batch_size, pin_memory=True)
 
 
     def update(self):
@@ -275,16 +271,14 @@ class Vanilla(PolicyUpdater):
         
         try:
             for i in range(self.vf_epochs):
-                loss_total = 0
-                batches = 0
-                self.value_optimizer.zero_grad()
                 for obs, discounted_reward in zip(self.obs_loader, self.discounted_reward_loader):
-                    value_loss = self._value_loss(obs[0].to(device), discounted_reward[0].to(device))
+                    self.value_optimizer.zero_grad()
+                    obs = obs[0].to(device)
+                    discounted_reward = discounted_reward[0].to(device)
+                    value_loss = self._value_loss(obs, discounted_reward)
                     value_loss.backward()
-                    loss_total += value_loss.item()
-                    batches += 1
-                self.value_optimizer.step()
-            self.stats[self.VALUE_FUNCTION_LOSS] = loss_total / batches
+                    self.value_optimizer.step()
+            self.stats[self.VALUE_FUNCTION_LOSS] = value_loss.item()
         finally:
             for p in self.policy.obs_encoder.parameters():
                 p.requires_grad=True
@@ -352,11 +346,19 @@ class PPO(Vanilla):
         super().__init__(hidden_sizes, policy, experience, policy_lr_scheduler, policy_epochs, vf_lr_scheduler, vf_epochs, lam)
         self.clip_ratio = clip_ratio
         self.target_kl = target_kl
+        self.vf_only_updates = 0
+
+        self.logp_old = torch.zeros(experience.batch_size, experience.buffer_size, **experience.tensor_args)
+
+        self.logp_old_loader = DataLoader(TensorDataset(self.logp_old), batch_size=self.batch_size, pin_memory=True)
 
 
     def update(self):
         # Policy upgrade
-        self._update_policy()
+        if self.vf_only_updates == 0:
+            self._update_policy()
+        else:
+            self.vf_only_updates -= 1
         self._update_value_function()
 
 
@@ -367,46 +369,48 @@ class PPO(Vanilla):
         self.stats[self.POLICY_LR] = new_policy_lr
 
         batch_start = 0
-        for obs, act in zip(self.obs_loader, self.action_loader):
-            obs = obs[0].to(device)
-            act = act[0].to(device)
-            current_batch_size = obs.shape[0]
-            self.logp_old[batch_start: batch_start+current_batch_size, ...] = self.policy.action_dist(obs).log_prob(act).sum(-1).detach()
-            batch_start += current_batch_size
+        with torch.no_grad():
+            for obs, act in zip(self.obs_loader, self.action_loader):
+                obs = obs[0].to(device)
+                act = act[0].to(device)
+                current_batch_size = obs.shape[0]
+                self.logp_old[batch_start: batch_start+current_batch_size, ...] = self.policy.action_dist(obs).log_prob(act).sum(-1).cpu()
+                batch_start += current_batch_size
         
         # Train policy with multiple steps of gradient descent
         self.stats[self.MAX_KL_REACHED] = 0.0        
         for i in range(self.policy_epochs):
             loss_total, kl_total, entropy_total, clip_factor_total = 0, 0, 0, 0
-            count = 0
-            batch_start = 0
+            loss_count, kl_count, entropy_count, clip_factor_count = 0, 0, 0, 0
             self.policy_optimizer.zero_grad()
-            for obs, act, adv in zip(self.obs_loader, self.action_loader, self.weight_loader):
+            for obs, act, adv, logp_old in zip(self.obs_loader, self.action_loader, self.weight_loader, self.logp_old_loader):
                 obs = obs[0].to(device)
                 act = act[0].to(device)
                 adv = adv[0].to(device)
-                current_batch_size = obs.shape[0]
-                logp_old = self.logp_old[batch_start: batch_start+current_batch_size]
-                batch_start += current_batch_size
+                logp_old = logp_old[0].to(device)
                 
-                policy_loss, sum_kl, sum_entropy, sum_clip_factor = self._policy_loss(logp_old, obs, act, adv)
+                policy_loss, kl, entropy, clip_factor = self._policy_loss(logp_old, obs, act, adv)
                 
-                loss_total += policy_loss.item()
-                kl_total += sum_kl
-                entropy_total += sum_entropy
-                clip_factor_total += sum_clip_factor
-                count += obs.shape[0] * obs.shape[1]
+                loss_total += policy_loss.sum().item()
+                loss_count += np.prod(policy_loss.shape)
+                kl_total += kl.sum().item()
+                kl_count += np.prod(kl.shape)
+                entropy_total += entropy.sum().item()
+                entropy_count += np.prod(entropy.shape)
+                clip_factor_total += clip_factor.sum().item()
+                clip_factor_count += np.prod(clip_factor.shape)
                 
-                if kl_total / count > 1.5 * self.target_kl:
+                if kl_total / kl_count > 1.5 * self.target_kl:
                     self.stats[self.MAX_KL_REACHED] = 1.0
                     break
-                policy_loss.backward()
+                
+                policy_loss.mean().backward()
             self.policy_optimizer.step()
         
-        self.stats[self.KL] = kl_total / count
-        self.stats[self.ENTROPY] = entropy_total / count
-        self.stats[self.CLIP_FACTOR] = clip_factor_total / count
-        self.stats[self.POLICY_LOSS] = loss_total / count
+        self.stats[self.KL] = kl_total / kl_count.item()
+        self.stats[self.ENTROPY] = entropy_total / entropy_count.item()
+        self.stats[self.CLIP_FACTOR] = clip_factor_total / clip_factor_count.item()
+        self.stats[self.POLICY_LOSS] = loss_total / loss_count.item()
 
 
     def _policy_loss(self, logp_old, obs, act, adv) -> Tuple[torch.tensor, float, float, float]:
@@ -415,12 +419,12 @@ class PPO(Vanilla):
         logp = action_dist.log_prob(act).sum(-1)
         ratio = torch.exp(logp - logp_old)
         clip_adv = torch.clamp(ratio, 1.0-self.clip_ratio, 1.0+self.clip_ratio) * adv
-        loss = -(torch.min(ratio * adv, clip_adv)).mean()
+        loss = -(torch.min(ratio * adv, clip_adv))
         
         # Stats
-        sum_kl = (logp_old - logp).sum().item()
-        sum_entropy = action_dist.entropy().mean().item()
+        kl = logp_old - logp
+        entropy = action_dist.entropy()
         clipped = ratio.gt(1+self.clip_ratio) | ratio.lt(1-self.clip_ratio)
-        sum_clip_factor = torch.as_tensor(clipped, dtype=torch.float32).sum().item()
+        clip_factor = torch.as_tensor(clipped, dtype=torch.float32)
         
-        return loss, sum_kl, sum_entropy, sum_clip_factor
+        return loss, kl, entropy, clip_factor

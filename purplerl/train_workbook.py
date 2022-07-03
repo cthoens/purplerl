@@ -1,4 +1,5 @@
 import os
+from xmlrpc.client import Boolean
 import gym
 import math
 
@@ -49,7 +50,7 @@ class WorkbenchObsEncoder(torch.nn.Module):
         return torch.concat((x, power_obs), -1)
 
 
-def run():
+def run(dev_mode = False):
     phase_config = {
         "phase1": {
             "policy_lr": 1e-4,
@@ -59,7 +60,8 @@ def run():
             "policy_lr_decay": 0.0,
             "vf_lr_decay": 0.0,
             "discount": 0.99,
-            "adv_lambda": 0.95
+            "adv_lambda": 0.95,
+            "clip_ratio": 0.2
         },
         "phase2": {
             "policy_lr": 1e-4,
@@ -69,14 +71,15 @@ def run():
             "policy_lr_decay": 0.0,
             "vf_lr_decay": 0.0,
             "discount": 0.99,
-            "adv_lambda": 0.95
+            "adv_lambda": 0.95,
+            "clip_ratio": 0.2
         }
     }
     active_phase = "phase1"
     config = phase_config[active_phase]
     config["phase"] = active_phase
-    #, mode="disabled"
-    with wandb.init(project="Workbook", config=config) as run:
+    wandb_mode = "online" if not dev_mode else "disabled"
+    with wandb.init(project="Workbook", config=config, mode=wandb_mode) as run:
         project_name = run.project
         if project_name=="": project_name = "Dev"
         run_training(project_name, run.name, **wandb.config)
@@ -97,7 +100,7 @@ def run_training(
     target_kl: float = 0.01,
 ):  
     batch_size = 6
-    buffer_size = 1000
+    buffer_size = 1550
     epochs = 500
     save_freq = 100
     
@@ -172,4 +175,9 @@ def run_training(
     trainer.run_training()
 
 if __name__ == '__main__':
-    run()
+    import argparse
+    parser = argparse.ArgumentParser()
+    parser.add_argument('--dev', action='store_true')
+    args = parser.parse_args()
+
+    run(args.dev)

@@ -8,8 +8,6 @@ setup(
    author_email='christoph.thoens@gmail.com',
    packages=['purplerl'],
    install_requires=[
-      'spinup',
-      'mlagents',
       'cloudpickle',
       'gym[box2d,classic_control]',
       'ipython',

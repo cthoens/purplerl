@@ -114,7 +114,7 @@ class Trainer:
                 max_episode_epoch = self.epoch
 
 
-            if success_rate == 1.0 and self.epoch - max_episode_epoch > 4:
+            if success_rate == 1.0 and self.epoch - max_episode_epoch > 5:
                 self.success_count += self.experience.ep_count
                 if (self.success_count > 500):
                     self.lesson += 1
