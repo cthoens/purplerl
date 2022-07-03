@@ -376,7 +376,6 @@ class PPO(Vanilla):
         self.stats[self.MAX_KL_REACHED] = 0.0        
         for i in range(max(self.policy_epochs, self.vf_epochs)):
             update_policy = self.vf_only_updates == 0 and i < self.policy_epochs and not max_kl_reached
-            self.vf_only_updates == max(self.vf_only_updates -1, 0)
             if update_policy:
                 loss_total, kl_total, entropy_total, clip_factor_total = 0, 0, 0, 0
                 loss_count, kl_count, entropy_count, clip_factor_count = 0, 0, 0, 0
@@ -429,10 +428,13 @@ class PPO(Vanilla):
                 self.policy_optimizer.step()
         
         self.stats[self.VALUE_FUNCTION_LOSS] = value_loss.item()
-        self.stats[self.KL] = kl_total / kl_count.item()
-        self.stats[self.ENTROPY] = entropy_total / entropy_count.item()
-        self.stats[self.CLIP_FACTOR] = clip_factor_total / clip_factor_count.item()
-        self.stats[self.POLICY_LOSS] = loss_total / loss_count.item()
+        if self.vf_only_updates == 0:
+            self.stats[self.KL] = kl_total / kl_count.item()
+            self.stats[self.ENTROPY] = entropy_total / entropy_count.item()
+            self.stats[self.CLIP_FACTOR] = clip_factor_total / clip_factor_count.item()
+            self.stats[self.POLICY_LOSS] = loss_total / loss_count.item()
+
+        self.vf_only_updates = max(self.vf_only_updates -1, 0)
 
 
     def _policy_loss(self, logp_old, obs, act, adv) -> Tuple[torch.tensor, float, float, float]:
