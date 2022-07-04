@@ -37,8 +37,8 @@ class ExperienceBufferBase:
     ) -> None:
         # Saved parameters
         self.discount = discount
-        self.num_envs = num_envs
         self.buffer_size = buffer_size
+        self.num_envs = num_envs
         self.tensor_args = tensor_args
         self.stats = {
             self.MEAN_RETURN: 0.0,
@@ -58,21 +58,21 @@ class ExperienceBufferBase:
         self.ep_cum_reward = np.zeros(num_envs, dtype=np.float32)
 
         # Stored data
-        self.action = torch.zeros(num_envs, buffer_size, *act_shape, **self.tensor_args)
+        self.action = torch.zeros(buffer_size, num_envs, *act_shape, **self.tensor_args)
         # The extra slot at the end of used in buffer_full()
-        self.step_reward_full = np.zeros((num_envs, buffer_size+1), dtype=np.float32)
-        self.step_reward = self.step_reward_full[:,:-1]
+        self.step_reward_full = np.zeros((buffer_size+1, num_envs), dtype=np.float32)
+        self.step_reward = self.step_reward_full[:-1,...]
 
         # Calculated data
-        self.discounted_reward = torch.zeros(num_envs, buffer_size, **self.tensor_args)
+        self.discounted_reward = torch.zeros(buffer_size, num_envs, **self.tensor_args)
 
     def step(self, act: torch.Tensor, reward: torch.Tensor):
         # Update in episode data
         self.ep_cum_reward += reward
 
         # Update overall data
-        self.action[:, self.next_step_index] = act
-        self.step_reward[:, self.next_step_index] = reward
+        self.action[self.next_step_index, :] = act
+        self.step_reward[self.next_step_index, :] = reward
         self.next_step_index += 1
 
     # accumulates statistics for all finished batches
@@ -106,11 +106,11 @@ class ExperienceBufferBase:
 
     
     def _finish_path(self, env_idx, last_state_value_estimate:float = 0.0):
-        self.step_reward_full[env_idx, self.next_step_index] = last_state_value_estimate
+        self.step_reward_full[self.next_step_index, env_idx] = last_state_value_estimate
         rew_range = range(self.ep_start_index[env_idx], self.next_step_index+1)
-        discounted_reward = discount_cumsum(self.step_reward_full[env_idx, rew_range], self.discount)
+        discounted_reward = discount_cumsum(self.step_reward_full[rew_range, env_idx], self.discount)
         ep_range = range(self.ep_start_index[env_idx], self.next_step_index)
-        self.discounted_reward[env_idx, ep_range] = torch.tensor(np.array(discounted_reward[:-1]), **self.tensor_args)
+        self.discounted_reward[ep_range, env_idx] = torch.tensor(np.array(discounted_reward[:-1]), **self.tensor_args)
  
 
     # clears the entire buffer
@@ -152,10 +152,10 @@ class MonoObsExperienceBuffer(ExperienceBufferBase):
     ) -> None:
         super().__init__(num_envs, buffer_size, act_shape, discount, tensor_args)
         # Stored data
-        self.obs = torch.zeros(num_envs, buffer_size, *obs_shape, **self.tensor_args)
+        self.obs = torch.zeros(buffer_size, num_envs, *obs_shape, **self.tensor_args)
 
     def step(self, obs: torch.Tensor, act: torch.Tensor, reward: torch.Tensor):
-        self.obs[:,self.next_step_index] = obs
+        self.obs[self.next_step_index, :] = obs
 
         # Note: Call after updating to prevent self.next_step_index from getting incremented too soon
         super().step(act, reward)

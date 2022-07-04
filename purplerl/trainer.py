@@ -68,13 +68,13 @@ class Trainer:
             epoch_start_time = time.time()
             self.experience.reset()
             self.policy_updater.reset()
-            action_mean_entropy = torch.empty(self.experience.num_envs, self.experience.buffer_size, dtype=torch.float32)
+            action_mean_entropy = torch.empty(self.experience.buffer_size, self.experience.num_envs, dtype=torch.float32)
             with torch.no_grad():
                 obs = to_tensor(self.env_manager.reset())
                 for step, _ in enumerate(range(self.experience.buffer_size)):
                     act_dist = self.policy.action_dist(obs)
                     act = act_dist.sample()
-                    action_mean_entropy[:, step] = act_dist.entropy().mean(-1)
+                    action_mean_entropy[step, :] = act_dist.entropy().mean(-1)
                     next_obs, rew, done, success = self.env_manager.step(act.cpu().numpy())
                     next_obs = to_tensor(next_obs)
 

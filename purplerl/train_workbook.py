@@ -99,8 +99,10 @@ def run_training(
     clip_ratio: float = 0.2,
     target_kl: float = 0.01,
 ):  
-    num_envs = 6
-    buffer_size = 1550
+    num_envs = 50
+    batch_size = 2650 // num_envs
+    buffer_size = batch_size * 4
+    
     epochs = 500
     save_freq = 100
     
@@ -141,6 +143,7 @@ def run_training(
     policy_updater = PPO(
         policy = policy,
         experience = experience,
+        batch_size = batch_size,
         hidden_sizes = [64, 64],
         policy_lr_scheduler = policy_lr_scheduler,
         vf_lr_scheduler = value_net_lr_scheduler,

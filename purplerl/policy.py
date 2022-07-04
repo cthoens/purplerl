@@ -132,6 +132,7 @@ class PolicyUpdater:
     def __init__(self,
         policy: StochasticPolicy,
         experience: ExperienceBufferBase,
+        batch_size,
         policy_lr_scheduler: Callable[[], float],
         policy_epochs: int = 3
     ) -> None:
@@ -142,9 +143,9 @@ class PolicyUpdater:
         self.policy_epochs = policy_epochs
         self.stats = {}
 
-        self.weight = torch.zeros(experience.num_envs, experience.buffer_size, **experience.tensor_args)
+        self.weight = torch.zeros(experience.buffer_size, experience.num_envs, **experience.tensor_args)
 
-        self.batch_size = 1
+        self.batch_size = batch_size
         self.obs_loader = DataLoader(TensorDataset(self.experience.obs), batch_size=self.batch_size, pin_memory=True)
         self.action_loader = DataLoader(TensorDataset(self.experience.action), batch_size=self.batch_size, pin_memory=True)
         self.weight_loader = DataLoader(TensorDataset(self.weight), batch_size=self.batch_size, pin_memory=True)
@@ -157,17 +158,17 @@ class PolicyUpdater:
         pass
 
 
-    def end_episode(self, finished_batches: torch.Tensor):
-        for batch, finished in enumerate(finished_batches):
+    def end_episode(self, finished_envs: torch.Tensor):
+        for env_idx, finished in enumerate(finished_envs):
             if not finished:
                 continue
 
-            if self.experience.next_step_index==self.experience.ep_start_index[batch]:
+            if self.experience.next_step_index==self.experience.ep_start_index[env_idx]:
                 raise InvalidStateErr("policy_updater.end_episode must be called before experience_buffer.end_episode!")
 
-            self._end_episode_batch(batch)
+            self._end_episode_batch(env_idx)
 
-    def _end_episode_batch(self, batch: int):
+    def _end_episode_batch(self, env_idx: int):
         pass
 
     def buffer_full(self, last_state_value_estimate: torch.tensor):
@@ -182,11 +183,13 @@ class PolicyUpdater:
     def _finish_path_batch(self, env_idx, last_state_value_estimate: float):
         pass
 
+
     def reset(self):
         self.weight[...] = 0.0
         
         for stat in self.stats.keys():
             self.stats[stat] = None
+
 
     def update(self):
         new_policy_lr = self.policy_lr_scheduler()
@@ -204,13 +207,16 @@ class PolicyUpdater:
 
         self.stats[self.POLICY_LOSS] = policy_loss.item()
 
+
     def value_estimate(self, obs):
         pass
+
 
     # make loss function whose gradient, for the right data, is policy gradient
     def _policy_loss(self, obs, act, weights):
         logp = self.policy.action_dist(obs).log_prob(act).sum(-1)
         return -(logp * weights).mean()
+
 
     def checkpoint(self):
         return {
@@ -230,13 +236,14 @@ class Vanilla(PolicyUpdater):
         hidden_sizes: list,
         policy: StochasticPolicy,
         experience: ExperienceBufferBase,
+        batch_size,
         policy_lr_scheduler: Callable[[], float],
         policy_epochs,
         vf_lr_scheduler: Callable[[], float],
         vf_epochs,
         lam: float = 0.95
     ) -> None:
-        super().__init__(policy, experience, policy_lr_scheduler, policy_epochs=policy_epochs)
+        super().__init__(policy, experience, batch_size, policy_lr_scheduler, policy_epochs=policy_epochs)
         self.lam = lam
         self.vf_lr_scheduler = vf_lr_scheduler
         self.vf_epochs = vf_epochs
@@ -293,10 +300,10 @@ class Vanilla(PolicyUpdater):
     def _finish_path_batch(self, env_idx, last_state_value_estimate: float = None):        
         reached_terminal_state = last_state_value_estimate is None
         path_slice = range(self.experience.ep_start_index[env_idx], self.experience.next_step_index)
-        rews = self.experience.step_reward[env_idx][path_slice]
+        rews = self.experience.step_reward[path_slice, env_idx]
         
         vals = np.zeros(len(path_slice)+1, dtype=np.float32)
-        vals[:-1] = self.value_net(self.experience.obs[env_idx][path_slice].to(device)).squeeze(-1).cpu().numpy()
+        vals[:-1] = self.value_net(self.experience.obs[path_slice, env_idx].to(device)).squeeze(-1).cpu().numpy()
         vals[-1] = last_state_value_estimate if not reached_terminal_state else 0.0
                 
         # estimated reward for state transition = estimated value of next state - estimated value of current state
@@ -308,7 +315,7 @@ class Vanilla(PolicyUpdater):
         if reached_terminal_state: expected_rewards[-1] = current_state_value[-1]
         deltas = rews + expected_rewards
         weight = discount_cumsum(deltas, self.experience.discount * self.lam)
-        self.weight[env_idx][path_slice] = torch.tensor(np.array(weight), **self.experience.tensor_args)
+        self.weight[path_slice, env_idx] = torch.tensor(np.array(weight), **self.experience.tensor_args)
 
 
     def checkpoint(self):
@@ -333,6 +340,7 @@ class PPO(Vanilla):
         hidden_sizes: list,
         policy: StochasticPolicy,
         experience: ExperienceBufferBase,
+        batch_size,
         policy_lr_scheduler: Callable[[], float],
         policy_epochs,
         vf_lr_scheduler: Callable[[], float],
@@ -341,12 +349,12 @@ class PPO(Vanilla):
         clip_ratio: float = 0.2,
         target_kl: float = 0.01,
     ) -> None:
-        super().__init__(hidden_sizes, policy, experience, policy_lr_scheduler, policy_epochs, vf_lr_scheduler, vf_epochs, lam)
+        super().__init__(hidden_sizes, policy, experience, batch_size, policy_lr_scheduler, policy_epochs, vf_lr_scheduler, vf_epochs, lam)
         self.clip_ratio = clip_ratio
         self.target_kl = target_kl
         self.vf_only_updates = 0
 
-        self.logp_old = torch.zeros(experience.num_envs, experience.buffer_size, **experience.tensor_args)
+        self.logp_old = torch.zeros(experience.buffer_size, experience.num_envs, **experience.tensor_args)
 
         self.logp_old_loader = DataLoader(TensorDataset(self.logp_old), batch_size=self.batch_size, pin_memory=True)
 
