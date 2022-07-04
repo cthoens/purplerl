@@ -399,13 +399,11 @@ class PPO(Vanilla):
                     policy_loss, kl, entropy, clip_factor = self._policy_loss(logp_old, obs, act, adv)
 
                     kl_total += kl.sum().item()
-                    kl_count += np.prod(kl.shape)
+                    kl_count += np.prod(kl.shape).item()
 
-                    if kl_total / kl_count.item() > 1.5 * self.target_kl:
+                    if kl_total / kl_count > 1.5 * self.target_kl:
                         max_kl_reached = True
                         self.stats[self.MAX_KL_REACHED] = 1.0
-                        # free the torch memory explicitly since we won't be calling backward()
-                        del policy_loss
                     else:
                         loss_total += policy_loss.sum().item()
                         loss_count += np.prod(policy_loss.shape).item()
@@ -419,6 +417,11 @@ class PPO(Vanilla):
                     # free up memory for the value function update
                     del act
                     del adv
+                    del policy_loss
+                    del logp_old
+                    del kl
+                    del entropy
+                    del clip_factor
 
                 # Value function update
                 if i < self.vf_epochs:
@@ -431,15 +434,17 @@ class PPO(Vanilla):
                         value_loss = self._value_loss(obs, discounted_reward)
                         value_loss.backward()
                         self.value_optimizer.step()
+                        value_loss_total = value_loss.item()
                     finally:
                         del discounted_reward
+                        del value_loss
                         for p in self.policy.obs_encoder.parameters():
                             p.requires_grad=True
                                  
             if update_policy:
                 self.policy_optimizer.step()
         
-        self.stats[self.VALUE_FUNCTION_LOSS] = value_loss.item()
+        self.stats[self.VALUE_FUNCTION_LOSS] = value_loss_total
         if self.vf_only_updates == 0:
             self.stats[self.KL] = kl_total / kl_count
             self.stats[self.ENTROPY] = entropy_total / entropy_count
