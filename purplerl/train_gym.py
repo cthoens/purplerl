@@ -34,7 +34,7 @@ class GymTrainer(Trainer):
             hidden_sizes=[64, 64],
             policy_lr=1e-2,
             value_net_lr=1e-2,
-            batch_size=4,
+            num_envs=4,
             buffer_size=5000,
             seed=20,
             epochs=50,
@@ -53,7 +53,7 @@ class GymTrainer(Trainer):
 
         # make environment, check spaces, get obs / act dims
         if isinstance(env, str):
-            env_manager: EnvManager = GymEnvManager(env_name=env, batch_size=batch_size)
+            env_manager: EnvManager = GymEnvManager(env_name=env, num_envs=num_envs)
         else:
             env_manager = env
 
@@ -72,7 +72,7 @@ class GymTrainer(Trainer):
             raise Exception("Unsupported action space")
 
         # make optimizer
-        experience = MonoObsExperienceBuffer(batch_size, buffer_size, obs_shape, policy.action_shape)
+        experience = MonoObsExperienceBuffer(num_envs, buffer_size, obs_shape, policy.action_shape)
 
         if algo == Algo.REWARD_TO_GO:
             policy_updater = RewardToGo(policy, experience, policy_lr)

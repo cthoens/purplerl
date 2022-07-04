@@ -16,15 +16,15 @@ class RobotArmObsEncoder(torch.nn.Module):
 class ExperienceBufferEx(ExperienceBufferBase):
     def __init__(self, env: UnityEnvManager, buffer_size: int):
         super().__init__(
-            batch_size = env.env_count,
+            num_envs = env.env_count,
             buffer_size = buffer_size,
             act_shape = env.action_space.shape
         )
-        self.trainingObs = torch.zeros(self.batch_size, buffer_size, *env.trainingSpec.shape, dtype= torch.float32, device=device)
-        self.goalObs = torch.zeros(self.batch_size, buffer_size, *env.goalSpec.shape, dtype= torch.float32, device=device)
-        self.jointPosObs = torch.zeros(self.batch_size, buffer_size, *env.jointPosSpec.shape, dtype= torch.float32, device=device)
-        self.goalPosObs = torch.zeros(self.batch_size, buffer_size, *env.goalPosSpec.shape, dtype= torch.float32, device=device)
-        self.remainingObs = torch.zeros(self.batch_size, buffer_size, *env.remainigSpec.shape, dtype= torch.float32, device=device)
+        self.trainingObs = torch.zeros(self.num_envs, buffer_size, *env.trainingSpec.shape, dtype= torch.float32, device=device)
+        self.goalObs = torch.zeros(self.num_envs, buffer_size, *env.goalSpec.shape, dtype= torch.float32, device=device)
+        self.jointPosObs = torch.zeros(self.num_envs, buffer_size, *env.jointPosSpec.shape, dtype= torch.float32, device=device)
+        self.goalPosObs = torch.zeros(self.num_envs, buffer_size, *env.goalPosSpec.shape, dtype= torch.float32, device=device)
+        self.remainingObs = torch.zeros(self.num_envs, buffer_size, *env.remainigSpec.shape, dtype= torch.float32, device=device)
         self.obs = ObsType(
             training= self.trainingObs,
             goal= self.goalObs,

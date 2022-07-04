@@ -76,12 +76,12 @@ class TestStringMethods(unittest.TestCase):
         # - Add 3 more steps of experience.
         # - Check buffers states.
 
-        b = ExperienceBuffer(batch_size = 2, buffer_size=6, obs_shape=2, algo = Algo.VANILLA)
+        b = ExperienceBuffer(num_envs = 2, buffer_size=6, obs_shape=2, algo = Algo.VANILLA)
         self.run_test(b, expected_weights=out_weight_vanilla2)
         b.reset()
         self.run_test(b, expected_weights=out_weight_vanilla2)
 
-        b = ExperienceBuffer(batch_size = 2, buffer_size=6, obs_shape=2, algo = Algo.REWARD_TO_GO)
+        b = ExperienceBuffer(num_envs = 2, buffer_size=6, obs_shape=2, algo = Algo.REWARD_TO_GO)
         self.run_test(b, expected_weights=out_weight_reward_to_go2)
         b.reset()
         self.run_test(b, expected_weights=out_weight_reward_to_go2)

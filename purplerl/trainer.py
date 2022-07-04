@@ -68,7 +68,7 @@ class Trainer:
             epoch_start_time = time.time()
             self.experience.reset()
             self.policy_updater.reset()
-            action_mean_entropy = torch.empty(self.experience.batch_size, self.experience.buffer_size, dtype=torch.float32)
+            action_mean_entropy = torch.empty(self.experience.num_envs, self.experience.buffer_size, dtype=torch.float32)
             with torch.no_grad():
                 obs = to_tensor(self.env_manager.reset())
                 for step, _ in enumerate(range(self.experience.buffer_size)):
@@ -127,7 +127,7 @@ class Trainer:
                     if has_more_lessons:
                         print(f"Starting lesson {self.lesson}")
                         if hasattr(self.policy_updater, 'vf_only_updates'):
-                            self.policy_updater.vf_only_updates = 1
+                            self.policy_updater.vf_only_updates = 30
                     else:
                         print(f"Training completed")
                         return

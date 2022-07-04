@@ -38,7 +38,7 @@ class WorkbenchObsEncoder(torch.nn.Module):
         self.shape: tuple[int, ...] = (65, )
 
     def forward(self, obs: torch.tensor):
-        # Note: obs can be of shape (batch_size, sheet_shape) or (batch_size, buffer_size, sheet_shape)
+        # Note: obs can be of shape (num_envs, sheet_shape) or (num_envs, buffer_size, sheet_shape)
         buffer_dims = list(obs.shape)[:-1]
         sheet_obs = obs[...,:-1]        
         power_obs = obs[...,-1:]
@@ -99,7 +99,7 @@ def run_training(
     clip_ratio: float = 0.2,
     target_kl: float = 0.01,
 ):  
-    batch_size = 6
+    num_envs = 6
     buffer_size = 1550
     epochs = 500
     save_freq = 100
@@ -111,7 +111,7 @@ def run_training(
         },
     )
 
-    env_manager= GymEnvManager('workbook-v0', batch_size=batch_size)
+    env_manager= GymEnvManager('workbook-v0', num_envs=num_envs)
 
     policy= ContinuousPolicy(
         obs_encoder=WorkbenchObsEncoder(),
@@ -127,7 +127,7 @@ def run_training(
         return vf_lr *  math.exp(-vf_lr_decay * experience.stats[ExperienceBufferBase.SUCCESS_RATE])
 
     experience = MonoObsExperienceBuffer(
-        batch_size, 
+        num_envs, 
         buffer_size, 
         env_manager.observation_space.shape, 
         policy.action_shape,

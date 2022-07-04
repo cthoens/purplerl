@@ -142,7 +142,7 @@ class PolicyUpdater:
         self.policy_epochs = policy_epochs
         self.stats = {}
 
-        self.weight = torch.zeros(experience.batch_size, experience.buffer_size, **experience.tensor_args)
+        self.weight = torch.zeros(experience.num_envs, experience.buffer_size, **experience.tensor_args)
 
         self.batch_size = 1
         self.obs_loader = DataLoader(TensorDataset(self.experience.obs), batch_size=self.batch_size, pin_memory=True)
@@ -172,14 +172,14 @@ class PolicyUpdater:
 
     def buffer_full(self, last_state_value_estimate: torch.tensor):
         assert(self.experience.next_step_index == self.experience.buffer_size)
-        for batch in range(self.experience.batch_size):
+        for env_idx in range(self.experience.num_envs):
             #  there is nothing to do if this batch just finished an episode
-            if self.experience.ep_start_index[batch] == self.experience.next_step_index:
+            if self.experience.ep_start_index[env_idx] == self.experience.next_step_index:
                 continue
 
-            self._finish_path_batch(batch, last_state_value_estimate[batch])
+            self._finish_path_batch(env_idx, last_state_value_estimate[env_idx])
 
-    def _finish_path_batch(self, batch, last_state_value_estimate: float):
+    def _finish_path_batch(self, env_idx, last_state_value_estimate: float):
         pass
 
     def reset(self):
@@ -286,17 +286,17 @@ class Vanilla(PolicyUpdater):
         return self.value_loss_function(self.value_net(obs).squeeze(-1), discounted_reward)
 
 
-    def _end_episode_batch(self, batch: int):
-        self._finish_path_batch(batch)
+    def _end_episode_batch(self, env_idx: int):
+        self._finish_path_batch(env_idx)
 
 
-    def _finish_path_batch(self, batch, last_state_value_estimate: float = None):        
+    def _finish_path_batch(self, env_idx, last_state_value_estimate: float = None):        
         reached_terminal_state = last_state_value_estimate is None
-        path_slice = range(self.experience.ep_start_index[batch], self.experience.next_step_index)
-        rews = self.experience.step_reward[batch][path_slice]
+        path_slice = range(self.experience.ep_start_index[env_idx], self.experience.next_step_index)
+        rews = self.experience.step_reward[env_idx][path_slice]
         
         vals = np.zeros(len(path_slice)+1, dtype=np.float32)
-        vals[:-1] = self.value_net(self.experience.obs[batch][path_slice].to(device)).squeeze(-1).cpu().numpy()
+        vals[:-1] = self.value_net(self.experience.obs[env_idx][path_slice].to(device)).squeeze(-1).cpu().numpy()
         vals[-1] = last_state_value_estimate if not reached_terminal_state else 0.0
                 
         # estimated reward for state transition = estimated value of next state - estimated value of current state
@@ -308,7 +308,7 @@ class Vanilla(PolicyUpdater):
         if reached_terminal_state: expected_rewards[-1] = current_state_value[-1]
         deltas = rews + expected_rewards
         weight = discount_cumsum(deltas, self.experience.discount * self.lam)
-        self.weight[batch][path_slice] = torch.tensor(np.array(weight), **self.experience.tensor_args)
+        self.weight[env_idx][path_slice] = torch.tensor(np.array(weight), **self.experience.tensor_args)
 
 
     def checkpoint(self):
@@ -346,7 +346,7 @@ class PPO(Vanilla):
         self.target_kl = target_kl
         self.vf_only_updates = 0
 
-        self.logp_old = torch.zeros(experience.batch_size, experience.buffer_size, **experience.tensor_args)
+        self.logp_old = torch.zeros(experience.num_envs, experience.buffer_size, **experience.tensor_args)
 
         self.logp_old_loader = DataLoader(TensorDataset(self.logp_old), batch_size=self.batch_size, pin_memory=True)
 

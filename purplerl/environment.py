@@ -180,10 +180,10 @@ class UnityEnvManager(EnvManager):
 
 
 class GymEnvManager(EnvManager):
-    def __init__(self, env_name='CartPole-v0', batch_size=2) -> None:
-        self.envs = [gym.make(env_name) for _ in range(batch_size)]
-        self.done = [False for _ in range(batch_size)]
-        self.success = [False for _ in range(batch_size)]
+    def __init__(self, env_name='CartPole-v0', num_envs=2) -> None:
+        self.envs = [gym.make(env_name) for _ in range(num_envs)]
+        self.done = [False for _ in range(num_envs)]
+        self.success = [False for _ in range(num_envs)]
         self.observation_space = self.envs[0].observation_space
         self.action_space = self.envs[0].action_space
 
