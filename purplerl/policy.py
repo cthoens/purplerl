@@ -398,23 +398,27 @@ class PPO(Vanilla):
 
                     policy_loss, kl, entropy, clip_factor = self._policy_loss(logp_old, obs, act, adv)
 
-                    loss_total += policy_loss.sum().item()
-                    loss_count += np.prod(policy_loss.shape)
                     kl_total += kl.sum().item()
                     kl_count += np.prod(kl.shape)
-                    entropy_total += entropy.sum().item()
-                    entropy_count += np.prod(entropy.shape)
-                    clip_factor_total += clip_factor.sum().item()
-                    clip_factor_count += np.prod(clip_factor.shape)
 
                     if kl_total / kl_count.item() > 1.5 * self.target_kl:
                         max_kl_reached = True
                         self.stats[self.MAX_KL_REACHED] = 1.0
-                    else:                    
+                        # free the torch memory explicitly since we won't be calling backward()
+                        del policy_loss
+                    else:
+                        loss_total += policy_loss.sum().item()
+                        loss_count += np.prod(policy_loss.shape).item()
+                        entropy_total += entropy.sum().item()
+                        entropy_count += np.prod(entropy.shape).item()
+                        clip_factor_total += clip_factor.sum().item()
+                        clip_factor_count += np.prod(clip_factor.shape).item()
+
                         policy_loss.mean().backward()
 
-                    act = None
-                    adv = None
+                    # free up memory for the value function update
+                    del act
+                    del adv
 
                 # Value function update
                 if i < self.vf_epochs:
@@ -428,7 +432,7 @@ class PPO(Vanilla):
                         value_loss.backward()
                         self.value_optimizer.step()
                     finally:
-                        discounted_reward = None
+                        del discounted_reward
                         for p in self.policy.obs_encoder.parameters():
                             p.requires_grad=True
                                  
@@ -437,10 +441,10 @@ class PPO(Vanilla):
         
         self.stats[self.VALUE_FUNCTION_LOSS] = value_loss.item()
         if self.vf_only_updates == 0:
-            self.stats[self.KL] = kl_total / kl_count.item()
-            self.stats[self.ENTROPY] = entropy_total / entropy_count.item()
-            self.stats[self.CLIP_FACTOR] = clip_factor_total / clip_factor_count.item()
-            self.stats[self.POLICY_LOSS] = loss_total / loss_count.item()
+            self.stats[self.KL] = kl_total / kl_count
+            self.stats[self.ENTROPY] = entropy_total / entropy_count
+            self.stats[self.CLIP_FACTOR] = clip_factor_total / clip_factor_count
+            self.stats[self.POLICY_LOSS] = loss_total / loss_count
 
         self.vf_only_updates = max(self.vf_only_updates -1, 0)
 
