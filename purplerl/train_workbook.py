@@ -118,7 +118,8 @@ def run_training(
     policy= ContinuousPolicy(
         obs_encoder=WorkbenchObsEncoder(),
         hidden_sizes=[64, 64],
-        action_space = env_manager.action_space
+        action_space = env_manager.action_space,
+        min_std=torch.as_tensor([0.1, 0.1])
     ).to(device)
     wandb.watch(policy)
 

@@ -91,11 +91,13 @@ class ContinuousPolicy(StochasticPolicy):
     def __init__(self,
         obs_encoder: torch.nn.Module,
         hidden_sizes: list[int],
-        action_space: list[int]
+        action_space: list[int],
+        min_std: torch.tensor = None
     ) -> None:
         super().__init__(obs_encoder)
         self.mean_net_output_shape = action_space.shape + (2, )
         self.action_shape = action_space.shape
+        self.min_std = min_std.to(device) if min_std is not None else torch.zeros(self.action_shape, **tensor_args)
         self.mean_net = nn.Sequential(
             self.obs_encoder,
             mlp(sizes=list(obs_encoder.shape) + hidden_sizes + [np.prod(np.array(self.mean_net_output_shape))])
@@ -109,7 +111,7 @@ class ContinuousPolicy(StochasticPolicy):
         shape = out.shape[:-1] + self.mean_net_output_shape
         out = out.reshape(shape)
         dist_mean = out[...,0]
-        dist_std = torch.exp(out[...,1])
+        dist_std = torch.max(torch.exp(out[...,1]), self.min_std)
         return Normal(loc=dist_mean, scale=dist_std)
 
 
