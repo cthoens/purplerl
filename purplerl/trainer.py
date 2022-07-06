@@ -129,8 +129,8 @@ class Trainer:
                     has_more_lessons = self.env_manager.set_lesson(self.lesson)
                     if has_more_lessons:
                         print(f"Starting lesson {self.lesson}")
-                        if hasattr(self.policy_updater, 'vf_only_updates'):
-                            self.policy_updater.vf_only_updates = 30
+                        #if hasattr(self.policy_updater, 'vf_only_updates'):
+                        #    self.policy_updater.vf_only_updates = 30
                     else:
                         print(f"Training completed")
                         return

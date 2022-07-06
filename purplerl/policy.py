@@ -13,7 +13,7 @@ from torch.utils.data import TensorDataset, DataLoader
 
 from torch.optim import Adam
 
-from purplerl.config import device, tensor_args
+from purplerl.config import device, tensor_args, pin
 from purplerl.sync_experience_buffer import ExperienceBufferBase, discount_cumsum
 
 
@@ -148,9 +148,9 @@ class PolicyUpdater:
         self.weight = torch.zeros(experience.buffer_size, experience.num_envs, **experience.tensor_args)
 
         self.batch_size = batch_size
-        self.obs_loader = DataLoader(TensorDataset(self.experience.obs), batch_size=self.batch_size, pin_memory=True)
-        self.action_loader = DataLoader(TensorDataset(self.experience.action), batch_size=self.batch_size, pin_memory=True)
-        self.weight_loader = DataLoader(TensorDataset(self.weight), batch_size=self.batch_size, pin_memory=True)
+        self.obs_loader = DataLoader(TensorDataset(self.experience.obs), batch_size=self.batch_size, pin_memory=pin)
+        self.action_loader = DataLoader(TensorDataset(self.experience.action), batch_size=self.batch_size, pin_memory=pin)
+        self.weight_loader = DataLoader(TensorDataset(self.weight), batch_size=self.batch_size, pin_memory=pin)
 
 
     def step(self):
@@ -256,7 +256,7 @@ class Vanilla(PolicyUpdater):
         self.value_optimizer = torch.optim.Adam(self.value_net.parameters(), lr = vf_lr_scheduler())
         self.value_loss_function = torch.nn.MSELoss()
 
-        self.discounted_reward_loader = torch.utils.data.DataLoader(TensorDataset(self.experience.discounted_reward), batch_size=self.batch_size, pin_memory=True)
+        self.discounted_reward_loader = torch.utils.data.DataLoader(TensorDataset(self.experience.discounted_reward), batch_size=self.batch_size, pin_memory=pin)
 
 
     def update(self):
@@ -335,7 +335,7 @@ class Vanilla(PolicyUpdater):
 class PPO(Vanilla):    
     KL = "KL"
     ENTROPY = "Entropy"
-    MAX_KL_REACHED = "Max KL Reached"
+    POLICY_EPOCHS = "Policy Epochs"
     CLIP_FACTOR = "Clip Factor"
     
     def __init__(self,
@@ -358,7 +358,7 @@ class PPO(Vanilla):
 
         self.logp_old = torch.zeros(experience.buffer_size, experience.num_envs, **experience.tensor_args)
 
-        self.logp_old_loader = DataLoader(TensorDataset(self.logp_old), batch_size=self.batch_size, pin_memory=True)
+        self.logp_old_loader = DataLoader(TensorDataset(self.logp_old), batch_size=self.batch_size, pin_memory=pin)
 
 
     def update(self):
@@ -383,7 +383,7 @@ class PPO(Vanilla):
         
         # Train policy with multiple steps of gradient descent
         max_kl_reached = False
-        self.stats[self.MAX_KL_REACHED] = 0.0        
+        self.stats[self.POLICY_EPOCHS] = 0
         for i in range(max(self.policy_epochs, self.vf_epochs)):
             update_policy = self.vf_only_updates == 0 and i < self.policy_epochs and not max_kl_reached
             if update_policy:
@@ -405,7 +405,6 @@ class PPO(Vanilla):
 
                     if kl_total / kl_count > 1.5 * self.target_kl:
                         max_kl_reached = True
-                        self.stats[self.MAX_KL_REACHED] = 1.0
                     else:
                         loss_total += policy_loss.sum().item()
                         loss_count += np.prod(policy_loss.shape).item()
@@ -445,6 +444,7 @@ class PPO(Vanilla):
                                  
             if update_policy:
                 self.policy_optimizer.step()
+                self.stats[self.POLICY_EPOCHS] += 1
         
         self.stats[self.VALUE_FUNCTION_LOSS] = value_loss_total
         if self.vf_only_updates == 0:
