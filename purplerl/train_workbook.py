@@ -176,6 +176,7 @@ def run_training(
         print("****\n**** Starting from scratch !!!\n****")
 
     trainer.run_training()
+    env_manager.close()
 
 if __name__ == '__main__':
     import argparse

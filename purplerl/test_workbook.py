@@ -1,12 +1,8 @@
-import time
-import os
-import os.path as osp
-from purplerl.policy import StochasticPolicy
 import torch
 
 from purplerl.train_workbook import WorkbenchObsEncoder
 from purplerl.workbook_env import WorkbookEnv
-from purplerl.trainer import CategoricalPolicy, ContinuousPolicy
+from purplerl.policy import StochasticPolicy, ContinuousPolicy
 from purplerl.config import device, tensor_args
 
 max_ep_len = 100

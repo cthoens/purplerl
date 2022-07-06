@@ -43,6 +43,9 @@ class EnvManager:
     def set_lesson(self, lesson):
         return False
 
+    def close(self):
+        pass
+
 ObsType = namedtuple('ObsType', ['training', 'goal', 'jointPos', 'goalPos', 'remaining'])
 
 class UnityEnvManager(EnvManager):

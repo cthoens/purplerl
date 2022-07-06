@@ -17,7 +17,7 @@ from purplerl.config import device, tensor_args
 from purplerl.sync_experience_buffer import ExperienceBufferBase, discount_cumsum
 
 
-def mlp(sizes, activation=nn.Tanh, output_activation=nn.Identity):
+def mlp(sizes, activation=nn.ReLU, output_activation=nn.Identity):
     layers = []
     for j in range(len(sizes)-1):
         layers += [nn.Linear(sizes[j], sizes[j+1], False)]
@@ -247,7 +247,7 @@ class Vanilla(PolicyUpdater):
         self.lam = lam
         self.vf_lr_scheduler = vf_lr_scheduler
         self.vf_epochs = vf_epochs
-        self.value_net = self.mean_net = nn.Sequential(
+        self.value_net = nn.Sequential(
             policy.obs_encoder,
             mlp(list(policy.obs_encoder.shape) + hidden_sizes + [1])
         ).to(device)
@@ -447,9 +447,10 @@ class PPO(Vanilla):
         self.stats[self.VALUE_FUNCTION_LOSS] = value_loss_total
         if self.vf_only_updates == 0:
             self.stats[self.KL] = kl_total / kl_count
-            self.stats[self.ENTROPY] = entropy_total / entropy_count
-            self.stats[self.CLIP_FACTOR] = clip_factor_total / clip_factor_count
-            self.stats[self.POLICY_LOSS] = loss_total / loss_count
+            if entropy_count != 0:
+                self.stats[self.ENTROPY] = entropy_total / entropy_count            
+                self.stats[self.CLIP_FACTOR] = clip_factor_total / clip_factor_count
+                self.stats[self.POLICY_LOSS] = loss_total / loss_count
 
         self.vf_only_updates = max(self.vf_only_updates -1, 0)
 

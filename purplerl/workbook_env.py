@@ -22,12 +22,13 @@ class WorkbookEnv(gym.Env):
     POWER = "power"   
     SHEET_OBS_SPACE = Box(float("-1"), float("1"), (1, 128, 128, ))
     POWER_OBS_SPACE = Box(float("-1"), float("1"), (1, ))
+    OBSERVATION_SPACE = Box(float("-1"), float("1"), tuple(np.prod(np.array(SHEET_OBS_SPACE.shape)) + np.array(POWER_OBS_SPACE.shape)))
     ACTION_SPACE = Box(float("-1"), float("1"), (2, ))
 
     MAX_STEPS_TOTAL = 80
 
-    def __init__(self) -> None:
-        # Set these in ALL subclasses
+    def __init__(self, sheet_path="sheets") -> None:
+        self.sheet_path = sheet_path
         self.screen = None
         self.clock = None
         self.steps_left = None
@@ -56,7 +57,7 @@ class WorkbookEnv(gym.Env):
         self.cursor_vel = None
         
         self.action_space = self.ACTION_SPACE
-        self.observation_space = Box(float("-1"), float("1"), tuple(np.prod(np.array(self.SHEET_OBS_SPACE.shape)) + np.array(self.POWER_OBS_SPACE.shape)))
+        self.observation_space = self.OBSERVATION_SPACE
 
 
     def set_lesson(self, lesson):
@@ -176,14 +177,14 @@ class WorkbookEnv(gym.Env):
             return True
 
     def _load_template(self, lesson_path, name):
-        with Image.open(os.path.join("sheets", lesson_path,  name)) as image:
+        with Image.open(os.path.join(self.sheet_path, lesson_path,  name)) as image:
             template = np.array(ImageOps.grayscale(image), dtype=np.float32)
             template /= 127.5
             template -= 1.0
         return template
 
     def _get_sheets(self, lesson):
-        path = os.path.join("sheets", lesson)
+        path = os.path.join(self.sheet_path, lesson)
         return [f for f in os.listdir(path) if os.path.isfile(os.path.join(path, f))]
 
     def _get_spawn_points(self, template):

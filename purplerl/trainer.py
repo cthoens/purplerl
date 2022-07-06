@@ -65,7 +65,7 @@ class Trainer:
         max_episode_epoch = 0
         for self.epoch in range(self.epochs):
             self.epoch += self.resume_epoch
-            epoch_start_time = time.time()
+            experience_start_time = time.time()
             self.experience.reset()
             self.policy_updater.reset()
             action_mean_entropy = torch.empty(self.experience.buffer_size, self.experience.num_envs, dtype=torch.float32)
@@ -91,9 +91,12 @@ class Trainer:
                 success_rate = self.experience.success_rate()
                 self.own_stats[self.ENTROPY] = action_mean_entropy.mean().item()
             
+            experience_duration = time.time() - experience_start_time
             
             # train            
+            update_start_time = time.time()
             self.policy_updater.update()
+            update_duration = time.time() - update_start_time
 
             if (self.epoch > 0 and  self.epoch % self.save_freq == 0) or (self.epoch == self.epochs):
                 self.save_checkpoint()
@@ -106,7 +109,7 @@ class Trainer:
                     else: 
                         log_str += f"{name}: {value}; "
             
-            print(f"Epoch: {self.epoch:3}; L: {self.lesson}; {log_str}")
+            print(f"Epoch: {self.epoch:3}; L: {self.lesson}; {log_str} Exp time: {experience_duration:.1f}; Update time: {update_duration:.1f}")
             wandb.log(copy.deepcopy(self.all_stats), step=self.epoch)
 
             if self.experience.ep_count > max_episode_count:
