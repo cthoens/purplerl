@@ -54,9 +54,9 @@ def run(dev_mode = False):
     phase_config = {
         "phase1": {
             "policy_lr": 1e-4,
-            "vf_lr": 2.5e-4,
+            "vf_lr": 2e-4,
             "policy_epochs" : 10,
-            "vf_epochs": 20,
+            "vf_epochs": 60,
             "policy_lr_decay": 0.0,
             "vf_lr_decay": 0.0,
             "discount": 0.99,
@@ -101,10 +101,10 @@ def run_training(
 ):  
     num_envs = 50
     batch_size = 2650 // num_envs
-    buffer_size = batch_size * 4
+    buffer_size = batch_size * 1
     
     epochs = 500
-    save_freq = 100
+    save_freq = 50
     
     gym.envs.register(
         id='workbook-v0',

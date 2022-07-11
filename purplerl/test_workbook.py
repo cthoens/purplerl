@@ -1,9 +1,10 @@
+import time
 import torch
 
 from purplerl.train_workbook import WorkbenchObsEncoder
 from purplerl.workbook_env import WorkbookEnv
 from purplerl.policy import StochasticPolicy, ContinuousPolicy
-from purplerl.config import device, tensor_args
+import purplerl.config as cfg
 
 max_ep_len = 100
 
@@ -15,9 +16,9 @@ def run_policy(env, policy: StochasticPolicy):
 
     while True:
         env.render()
-        #time.sleep(1e1)
+        time.sleep(1)
 
-        a = policy.act(torch.as_tensor(obs, **tensor_args))
+        a = policy.act(torch.as_tensor(obs, **cfg.tensor_args))
         obs, r, d, _ = env.step(a.cpu().numpy())
         ep_ret += r
         ep_len += 1
@@ -36,14 +37,14 @@ if __name__ == '__main__':
     #parser = argparse.ArgumentParser()
     #parser.add_argument('fpath', type=str)
     #args = parser.parse_args()
-    
+    cfg.use_cpu()
     env = WorkbookEnv()
     policy= ContinuousPolicy(
         obs_encoder=WorkbenchObsEncoder(),
         hidden_sizes=[64, 64],
         action_space = env.action_space
-    ).to(device)
-    checkpoint = torch.load("/home/cthoens/code/UnityRL/purplerl/results/Workbook/phase2/leafy-dew-76/checkpoint1000.pt")
+    ).to(cfg.device)
+    checkpoint = torch.load("results/Workbook/phase1/fragrant-darkness-169/lesson 1.pt", map_location=cfg.device)
     policy.load_checkpoint(checkpoint["policy"])
     
     run_policy(env, policy)

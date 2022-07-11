@@ -26,6 +26,7 @@ class Trainer:
     TRAINER = "Trainer"
     ENTROPY = "Entropy"
     LESSON = "lesson"
+    LESSON_START_EPOCH = "lesson_start_epoch"
     EPOCH = "epoch"
 
     def __init__(self, 
@@ -45,8 +46,10 @@ class Trainer:
         self.epoch=0
         self.save_freq=save_freq
         self.lesson = 0
-        self.success_count = 0
+        self.lesson_start_epoch = 0
         self.resume_epoch = 1 # have epochs start at 1 and not 0
+        if hasattr(self.policy_updater, 'vf_only_updates'):
+            self.policy_updater.vf_only_updates = 5
         self.output_dir = output_dir
         os.makedirs(output_dir)
         self.own_stats = {
@@ -61,8 +64,8 @@ class Trainer:
 
 
     def run_training(self):
-        max_episode_count = 0
-        max_episode_epoch = 0
+        #max_disc_reward = float('-inf')
+        #max_disc_reward_epoch = 0
         for self.epoch in range(self.epochs):
             self.epoch += self.resume_epoch
             experience_start_time = time.time()
@@ -88,7 +91,6 @@ class Trainer:
                 self.experience.buffer_full(last_obs_value_estimate)
                 self.policy_updater.buffer_full(last_obs_value_estimate)
                 
-                success_rate = self.experience.success_rate()
                 self.own_stats[self.ENTROPY] = action_mean_entropy.mean().item()
             
             experience_duration = time.time() - experience_start_time
@@ -112,30 +114,31 @@ class Trainer:
             print(f"Epoch: {self.epoch:3}; L: {self.lesson}; {log_str} Exp time: {experience_duration:.1f}; Update time: {update_duration:.1f}")
             wandb.log(copy.deepcopy(self.all_stats), step=self.epoch)
 
-            if self.experience.ep_count > max_episode_count:
-                max_episode_count = self.experience.ep_count
-                max_episode_epoch = self.epoch
+            # epoch_disc_reward = self.experience.mean_disc_reward()
+            # lesson_warmup_phase = self.epoch - self.lesson_start_epoch <= 10
+            # if lesson_warmup_phase:
+            #     max_disc_reward_epoch = self.epoch + 1
+            #     max_disc_reward = float('-inf')
+            # elif epoch_disc_reward > max_disc_reward:
+            #     max_disc_reward = epoch_disc_reward
+            #     max_disc_reward_epoch = self.epoch
 
-
-            if success_rate == 1.0 and self.epoch - max_episode_epoch > 5:
-                self.success_count += self.experience.ep_count
-                if (self.success_count > 500):
-                    self.lesson += 1
-                    max_episode_count = 0
-                    max_episode_epoch = self.epoch
-                    self.own_stats[self.LESSON] = self.lesson
-                    self.save_checkpoint(f"lesson {self.lesson}.pt")
-                    
-                    has_more_lessons = self.env_manager.set_lesson(self.lesson)
-                    if has_more_lessons:
-                        print(f"Starting lesson {self.lesson}")
-                        #if hasattr(self.policy_updater, 'vf_only_updates'):
-                        #    self.policy_updater.vf_only_updates = 30
-                    else:
-                        print(f"Training completed")
-                        return
-            else:
-                self.success_count = 0
+            # if self.epoch - max_disc_reward_epoch > 20:               
+            #     self.lesson += 1
+            #     self.lesson_start_epoch = self.epoch + 1
+            #     max_disc_reward = float('-inf')
+            #     max_disc_reward_epoch = self.epoch + 1
+            #     self.own_stats[self.LESSON] = self.lesson
+            #     self.save_checkpoint(f"lesson {self.lesson}.pt")
+                
+            #     has_more_lessons = self.env_manager.set_lesson(self.lesson)
+            #     if has_more_lessons:
+            #         print(f"Starting lesson {self.lesson}")
+            #         if hasattr(self.policy_updater, 'vf_only_updates'):
+            #             self.policy_updater.vf_only_updates = 2
+            #     else:
+            #         print(f"Training completed")
+            #         return
 
     def save_checkpoint(self, fname = None):
         full_state = {
@@ -163,6 +166,7 @@ class Trainer:
         self.resume_epoch = trainer_state.get(self.EPOCH, 0)+1
         
         self.lesson = trainer_state.get(self.LESSON, 0)
+        self.lesson_start_epoch = trainer_state.get(self.LESSON_START_EPOCH, 0)
         self.env_manager.set_lesson(self.lesson)
         self.own_stats[self.LESSON] = self.lesson
 
@@ -170,5 +174,6 @@ class Trainer:
         state_dict = {
             self.EPOCH: self.epoch,
             self.LESSON: self.lesson,
+            self.LESSON_START_EPOCH: self.lesson_start_epoch
         }
         return state_dict

@@ -25,6 +25,7 @@ def discount_cumsum(x, discount):
 
 class ExperienceBufferBase:
     MEAN_RETURN = "Mean Return"
+    DISC_REWARD = "Disc Reward"
     SUCCESS_RATE = "Success Rate"
     EPISODE_COUNT = "Ep Count"
     
@@ -42,6 +43,7 @@ class ExperienceBufferBase:
         self.tensor_args = tensor_args
         self.stats = {
             self.MEAN_RETURN: 0.0,
+            self.DISC_REWARD: 0.0,
             self.SUCCESS_RATE: 0.0,
             self.EPISODE_COUNT: 0
         }
@@ -103,6 +105,7 @@ class ExperienceBufferBase:
 
             self._finish_path(env_idx, last_state_value_estimate[env_idx])
         self.stats[self.MEAN_RETURN] = self.mean_return()
+        self.stats[self.DISC_REWARD] = self.mean_disc_reward()
 
     
     def _finish_path(self, env_idx, last_state_value_estimate:float = 0.0):
@@ -136,6 +139,9 @@ class ExperienceBufferBase:
 
     def mean_return(self) -> float:
         return self.ep_return[:self.ep_count].mean().item()
+
+    def mean_disc_reward(self) -> float:
+        return self.discounted_reward[:self.ep_count].mean().item()
 
     def success_rate(self) -> float:
         return self.ep_success_count / self.ep_success_info_count

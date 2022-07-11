@@ -13,7 +13,7 @@ from torch.utils.data import TensorDataset, DataLoader
 
 from torch.optim import Adam
 
-from purplerl.config import device, tensor_args, pin
+import purplerl.config as cfg
 from purplerl.sync_experience_buffer import ExperienceBufferBase, discount_cumsum
 
 
@@ -68,7 +68,7 @@ class CategoricalPolicy(StochasticPolicy):
         self.logits_net = nn.Sequential(
             self.obs_encoder,
             mlp(sizes = list(obs_encoder.shape) + hidden_sizes + [np.prod(self.distribution_input_shape)] ),
-        ).to(device)
+        ).to(cfg.device)
 
 
     # make function to compute action distribution
@@ -97,7 +97,7 @@ class ContinuousPolicy(StochasticPolicy):
         super().__init__(obs_encoder)
         self.mean_net_output_shape = action_space.shape + (2, )
         self.action_shape = action_space.shape
-        self.min_std = min_std.to(device) if min_std is not None else torch.zeros(self.action_shape, **tensor_args)
+        self.min_std = min_std.to(cfg.device) if min_std is not None else torch.zeros(self.action_shape, **cfg.tensor_args)
         self.mean_net = nn.Sequential(
             self.obs_encoder,
             mlp(sizes=list(obs_encoder.shape) + hidden_sizes + [np.prod(np.array(self.mean_net_output_shape))])
@@ -148,9 +148,9 @@ class PolicyUpdater:
         self.weight = torch.zeros(experience.buffer_size, experience.num_envs, **experience.tensor_args)
 
         self.batch_size = batch_size
-        self.obs_loader = DataLoader(TensorDataset(self.experience.obs), batch_size=self.batch_size, pin_memory=pin)
-        self.action_loader = DataLoader(TensorDataset(self.experience.action), batch_size=self.batch_size, pin_memory=pin)
-        self.weight_loader = DataLoader(TensorDataset(self.weight), batch_size=self.batch_size, pin_memory=pin)
+        self.obs_loader = DataLoader(TensorDataset(self.experience.obs), batch_size=self.batch_size, pin_memory=cfg.pin)
+        self.action_loader = DataLoader(TensorDataset(self.experience.action), batch_size=self.batch_size, pin_memory=cfg.pin)
+        self.weight_loader = DataLoader(TensorDataset(self.weight), batch_size=self.batch_size, pin_memory=cfg.pin)
 
 
     def step(self):
@@ -202,7 +202,7 @@ class PolicyUpdater:
         for _ in range(self.policy_epochs):
             self.policy_optimizer.zero_grad()
             for obs, act, weights in zip(self.obs_loader, self.action_loader, self.weight_loader):
-                policy_loss = self._policy_loss(obs[0].to(device), act[0].to(device), weights[0].to(device))
+                policy_loss = self._policy_loss(obs[0].to(cfg.device), act[0].to(cfg.device), weights[0].to(cfg.device))
                 policy_loss.backward()
                 batches += 1
             self.policy_optimizer.step()
@@ -252,17 +252,21 @@ class Vanilla(PolicyUpdater):
         self.value_net = nn.Sequential(
             policy.obs_encoder,
             mlp(list(policy.obs_encoder.shape) + hidden_sizes + [1])
-        ).to(device)
+        ).to(cfg.device)
         self.value_optimizer = torch.optim.Adam(self.value_net.parameters(), lr = vf_lr_scheduler())
         self.value_loss_function = torch.nn.MSELoss()
 
-        self.discounted_reward_loader = torch.utils.data.DataLoader(TensorDataset(self.experience.discounted_reward), batch_size=self.batch_size, pin_memory=pin)
+        self.discounted_reward_loader = torch.utils.data.DataLoader(TensorDataset(self.experience.discounted_reward), batch_size=self.batch_size, pin_memory=cfg.pin)
 
 
     def update(self):
         super().update()
 
         self._update_value_function()
+
+
+    def reset(self):
+        super().reset()
 
     def value_estimate(self, obs):
         return self.value_net(obs).squeeze(-1)
@@ -280,8 +284,8 @@ class Vanilla(PolicyUpdater):
             for i in range(self.vf_epochs):
                 for obs, discounted_reward in zip(self.obs_loader, self.discounted_reward_loader):
                     self.value_optimizer.zero_grad()
-                    obs = obs[0].to(device)
-                    discounted_reward = discounted_reward[0].to(device)
+                    obs = obs[0].to(cfg.device)
+                    discounted_reward = discounted_reward[0].to(cfg.device)
                     value_loss = self._value_loss(obs, discounted_reward)
                     value_loss.backward()
                     self.value_optimizer.step()
@@ -304,8 +308,10 @@ class Vanilla(PolicyUpdater):
         path_slice = range(self.experience.ep_start_index[env_idx], self.experience.next_step_index)
         rews = self.experience.step_reward[path_slice, env_idx]
         
+        obs_device = self.experience.obs[path_slice, env_idx].to(cfg.device)
+
         vals = np.zeros(len(path_slice)+1, dtype=np.float32)
-        vals[:-1] = self.value_net(self.experience.obs[path_slice, env_idx].to(device)).squeeze(-1).cpu().numpy()
+        vals[:-1] = self.value_net(obs_device).squeeze(-1).cpu().numpy()
         vals[-1] = last_state_value_estimate if not reached_terminal_state else 0.0
                 
         # estimated reward for state transition = estimated value of next state - estimated value of current state
@@ -321,7 +327,7 @@ class Vanilla(PolicyUpdater):
 
 
     def checkpoint(self):
-        return super().checkpoint() | {            
+        return super().checkpoint() | {
             'value_net_state_dict': self.value_net.state_dict(),
             'value_net_optimizer_state_dict': self.value_optimizer.state_dict()
         }
@@ -358,7 +364,7 @@ class PPO(Vanilla):
 
         self.logp_old = torch.zeros(experience.buffer_size, experience.num_envs, **experience.tensor_args)
 
-        self.logp_old_loader = DataLoader(TensorDataset(self.logp_old), batch_size=self.batch_size, pin_memory=pin)
+        self.logp_old_loader = DataLoader(TensorDataset(self.logp_old), batch_size=self.batch_size, pin_memory=cfg.pin)
 
 
     def update(self):
@@ -375,8 +381,8 @@ class PPO(Vanilla):
         batch_start = 0
         with torch.no_grad():
             for obs, act in zip(self.obs_loader, self.action_loader):
-                obs = obs[0].to(device)
-                act = act[0].to(device)
+                obs = obs[0].to(cfg.device)
+                act = act[0].to(cfg.device)
                 current_batch_size = obs.shape[0]
                 self.logp_old[batch_start: batch_start+current_batch_size, ...] = self.policy.action_dist(obs).log_prob(act).sum(-1).cpu()
                 batch_start += current_batch_size
@@ -392,11 +398,11 @@ class PPO(Vanilla):
                 self.policy_optimizer.zero_grad()
             for obs, act, adv, logp_old, discounted_reward in zip(self.obs_loader, self.action_loader, self.weight_loader, self.logp_old_loader, self.discounted_reward_loader):
                 # Policy updates                
-                obs = obs[0].to(device)
+                obs = obs[0].to(cfg.device)
                 if update_policy and not max_kl_reached:
-                    act = act[0].to(device)
-                    adv = adv[0].to(device)
-                    logp_old = logp_old[0].to(device)
+                    act = act[0].to(cfg.device)
+                    adv = adv[0].to(cfg.device)
+                    logp_old = logp_old[0].to(cfg.device)
 
                     policy_loss, kl, entropy, clip_factor = self._policy_loss(logp_old, obs, act, adv)
 
@@ -431,7 +437,7 @@ class PPO(Vanilla):
                     
                     try:
                         self.value_optimizer.zero_grad()
-                        discounted_reward = discounted_reward[0].to(device)
+                        discounted_reward = discounted_reward[0].to(cfg.device)
                         value_loss = self._value_loss(obs, discounted_reward)
                         value_loss.backward()
                         self.value_optimizer.step()
