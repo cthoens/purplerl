@@ -10,7 +10,14 @@ max_ep_len = 100
 
 def run_policy(env, policy: StochasticPolicy):
 
-    obs = env.reset()
+    state = WorkbookEnv.SheetState(
+        lesson = 0,
+        template_idx = 0,
+        flip = False,
+        rot=3
+    )
+
+    obs = env.reset(sheet_state = state)
     ep_ret = 0
     ep_len = 0
 
@@ -25,7 +32,7 @@ def run_policy(env, policy: StochasticPolicy):
 
         if d or (ep_len == max_ep_len):
             print(f'EpRet {ep_ret} \t EpLen {ep_len}')
-            obs, r, d, ep_ret, ep_len = env.reset(), 0, False, 0, 0            
+            obs, r, d, ep_ret, ep_len = env.reset(sheet_state = state), 0, False, 0, 0            
 
 def run():
     pass
@@ -44,7 +51,7 @@ if __name__ == '__main__':
         hidden_sizes=[64, 64],
         action_space = env.action_space
     ).to(cfg.device)
-    checkpoint = torch.load("results/Workbook/phase1/fragrant-darkness-169/lesson 1.pt", map_location=cfg.device)
+    checkpoint = torch.load("results/Workbook/phase1/visionary-voice-195/checkpoint150.pt", map_location=cfg.device)
     policy.load_checkpoint(checkpoint["policy"])
     
     run_policy(env, policy)

@@ -35,14 +35,14 @@ class WorkbookEnv(gym.Env):
         self.clock = None
         self.energy_left = None
         self.lesson_paths = ["l00", "l01", "l02", "l10", "l20", "l30"]
-        self.lesson_lengths = [3, 3, 3, 10, 10, 10]
+        self.lesson_lengths = [8, 8, 8, 10, 10, 10]
         self.sheets = [self._get_sheets(lesson) for lesson in self.lesson_paths]
         self.templates = [[self._load_template(lesson_path, sheet) for sheet in lesson] for lesson, lesson_path in zip(self.sheets, self.lesson_paths)]
         self.lesson = 0
         self.max_episode_steps = self.lesson_lengths[self.lesson]
         self.template = 0
         self.max_speed = 2.0
-        self.energy_reward_coeff = 0.5
+        self.energy_reward_coeff = 1.0
         
         self.cursor = np.array([
             [0, 0, 0, 1, 0, 0, 0],
@@ -85,7 +85,7 @@ class WorkbookEnv(gym.Env):
                 lesson = self.lesson,
                 template_idx = int(np.random.uniform(low=0.0, high=len(self.templates[self.lesson]) - 1e-7)),
                 flip = np.random.uniform(low=0.0, high=1.0) > 0.5,
-                rot=int(np.random.uniform(low=0.0, high=3.0 - 1e-7))
+                rot=int(np.random.uniform(low=0.0, high=4.0))
             )
         
         self.sheet = np.array(self.templates[state.lesson][state.template_idx])
@@ -102,13 +102,13 @@ class WorkbookEnv(gym.Env):
             self.SPAWN_DICT[state] = spawn_points
 
         idx = np.unravel_index(spawn_points[np.random.randint(low=0, high=len(spawn_points), size=1)[0]], self.SHEET_OBS_SPACE.shape)
-        self.cursor_pos = idx[1:]
+        self.cursor_pos = np.array(idx[1:]) + 0.5
         assert(self._get_pixel() == 1.0)
         return self._get_obs()
 
 
     def step(self, action):
-        assert self.cursor_pos is not None, "Call reset before using step method."
+        assert self.energy_left is not None, "Call reset before using step method."
         
         self.cursor_vel = action
         action_speed = np.linalg.norm(self.cursor_vel)
@@ -125,13 +125,11 @@ class WorkbookEnv(gym.Env):
             reward = 1.0 + self.energy_reward_coeff * (self.energy_left / self.MAX_ENERGY)
             done = True
             info = {"success": True}
-            self.cursor_pos = None
             self.energy_left = None
         elif self.energy_left <= 0:
             reward = -1.0
             done = True
             info = {"success": False}
-            self.cursor_pos = None
             self.energy_left = None
         else:
             reward = 0.0
@@ -157,7 +155,7 @@ class WorkbookEnv(gym.Env):
         return np.concatenate((obs.flatten(), power_obs))
 
     def _get_cursor_pos_int(self):
-        return np.rint(self.cursor_pos).astype(np.int32)
+        return self.cursor_pos.astype(np.int32)
         
 
     def _get_pixel(self):

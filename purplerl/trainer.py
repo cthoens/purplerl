@@ -36,7 +36,8 @@ class Trainer:
         policy_updater: PolicyUpdater,
         epochs=50,
         save_freq=20,
-        output_dir=""
+        output_dir="",
+        eval_func=None
     ) -> None:
         self.env_manager = env_manager
         self.experience = experience
@@ -48,8 +49,7 @@ class Trainer:
         self.lesson = 0
         self.lesson_start_epoch = 0
         self.resume_epoch = 1 # have epochs start at 1 and not 0
-        if hasattr(self.policy_updater, 'vf_only_updates'):
-            self.policy_updater.vf_only_updates = 5
+        self.eval_func=eval_func
         self.output_dir = output_dir
         os.makedirs(output_dir)
         self.own_stats = {
@@ -113,6 +113,12 @@ class Trainer:
             
             print(f"Epoch: {self.epoch:3}; L: {self.lesson}; {log_str} Exp time: {experience_duration:.1f}; Update time: {update_duration:.1f}")
             wandb.log(copy.deepcopy(self.all_stats), step=self.epoch)
+            if self.eval_func is not None:
+                plot = self.eval_func(self.epoch, self.policy, self.policy_updater.value_net)
+                if plot:
+                    wandb.log({"chart": plot})
+                    plot.close()
+            
 
             # epoch_disc_reward = self.experience.mean_disc_reward()
             # lesson_warmup_phase = self.epoch - self.lesson_start_epoch <= 10

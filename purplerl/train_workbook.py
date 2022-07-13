@@ -1,5 +1,4 @@
 import os
-from xmlrpc.client import Boolean
 import gym
 import math
 
@@ -7,14 +6,12 @@ import torch
 from torch.nn import Conv2d, Sequential, BatchNorm2d, ReLU, MaxPool2d, Linear, Flatten
 import wandb
 
-
 from purplerl.sync_experience_buffer import ExperienceBufferBase
 from purplerl.trainer import MonoObsExperienceBuffer, Trainer
 from purplerl.environment import GymEnvManager
-from purplerl.policy import ContinuousPolicy, Vanilla, PPO
+from purplerl.policy import ContinuousPolicy, PPO
 from purplerl.config import device
-
-import os.path as osp
+from purplerl.eval_workbook import do_eval
 
 class WorkbenchObsEncoder(torch.nn.Module):
     def __init__(self) -> None:
@@ -32,10 +29,10 @@ class WorkbenchObsEncoder(torch.nn.Module):
             ReLU(inplace=True),
             MaxPool2d(kernel_size=2, stride=2),
             Flatten(),
-            Linear(4096, 64)
+            Linear(4096, 128)
         )
 
-        self.shape: tuple[int, ...] = (65, )
+        self.shape: tuple[int, ...] = (129, )
 
     def forward(self, obs: torch.tensor):
         # Note: obs can be of shape (num_envs, sheet_shape) or (num_envs, buffer_size, sheet_shape)
@@ -45,7 +42,7 @@ class WorkbenchObsEncoder(torch.nn.Module):
         # flatten buffer dimensions since the cnn only accepts 3D or 4D input
         x = self.cnn_layers(sheet_obs.reshape(-1, 1, 128, 128))
         # restore the buffer dimension        
-        x = x.reshape(*(buffer_dims + [64]))
+        x = x.reshape(*(buffer_dims + [128]))
 
         return torch.concat((x, power_obs), -1)
 
@@ -54,12 +51,12 @@ def run(dev_mode = False):
     phase_config = {
         "phase1": {
             "policy_lr": 1e-4,
-            "vf_lr": 2e-4,
+            "vf_lr": 1e-3,
             "policy_epochs" : 10,
-            "vf_epochs": 60,
+            "vf_epochs": 30,
             "policy_lr_decay": 0.0,
             "vf_lr_decay": 0.0,
-            "discount": 0.99,
+            "discount": 0.95,
             "adv_lambda": 0.95,
             "clip_ratio": 0.2
         },
@@ -103,7 +100,7 @@ def run_training(
     batch_size = 2650 // num_envs
     buffer_size = batch_size * 1
     
-    epochs = 500
+    epochs = 150
     save_freq = 50
     
     gym.envs.register(
@@ -117,7 +114,7 @@ def run_training(
 
     policy= ContinuousPolicy(
         obs_encoder=WorkbenchObsEncoder(),
-        hidden_sizes=[64, 64],
+        hidden_sizes=[128, 128],
         action_space = env_manager.action_space,
         min_std=torch.as_tensor([0.1, 0.1])
     ).to(device)
@@ -145,7 +142,7 @@ def run_training(
         policy = policy,
         experience = experience,
         batch_size = batch_size,
-        hidden_sizes = [64, 64],
+        hidden_sizes = [128, 128],
         policy_lr_scheduler = policy_lr_scheduler,
         vf_lr_scheduler = value_net_lr_scheduler,
         policy_epochs = policy_epochs,
@@ -156,6 +153,7 @@ def run_training(
     )
     wandb.watch(policy_updater.value_net)
 
+    out_dir = f"results/{project_name}/{phase}/{exp_name}"
     trainer = Trainer(
         env_manager = env_manager,
         experience = experience,
@@ -163,7 +161,8 @@ def run_training(
         policy_updater = policy_updater,
         epochs = epochs,
         save_freq = save_freq,
-        output_dir= f"results/{project_name}/{phase}/{exp_name}"
+        output_dir= out_dir,
+        eval_func = lambda epoch, policy, value_net: do_eval(out_dir, epoch, policy, value_net)
     )
     
     checkpoint_path = os.path.join(f"results/{project_name}", f"{phase}-resume.pt")    
@@ -184,5 +183,8 @@ if __name__ == '__main__':
     parser = argparse.ArgumentParser()
     parser.add_argument('--dev', action='store_true')
     args = parser.parse_args()
+
+    import matplotlib
+    matplotlib.use('Agg')
 
     run(args.dev)
