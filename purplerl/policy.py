@@ -111,7 +111,7 @@ class ContinuousPolicy(StochasticPolicy):
         shape = out.shape[:-1] + self.mean_net_output_shape
         out = out.reshape(shape)
         dist_mean = out[...,0]
-        dist_std = torch.max(torch.exp(out[...,1]), self.min_std)
+        dist_std = torch.max(2.0 * torch.exp(out[...,1]), self.min_std)
         return Normal(loc=dist_mean, scale=dist_std)
 
 

@@ -149,8 +149,8 @@ def visualize_traj(env, sheet, trajectories, scale = 22):
         pt_from = traj[0] * scale
         for pt_to in traj[1:]:
             pt_to *= scale
-            draw.line([tuple(pt_from), tuple(pt_to)], fill=0.5, width=3)
-            draw.ellipse([tuple(pt_from-3), tuple(pt_from+3)], outline=0.5, width=6)
+            draw.line([tuple(pt_from), tuple(pt_to)], fill=0.5, width=4)
+            draw.ellipse([tuple(pt_from-4), tuple(pt_from+4)], outline=0.5, width=6)
             
             pt_from = pt_to
     

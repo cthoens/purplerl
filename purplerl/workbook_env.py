@@ -21,10 +21,12 @@ class WorkbookEnv(gym.Env):
 
     SHEET = "sheet"
     POWER = "power"   
+    ACTION_SPACE = Box(float("-1"), float("1"), (2, ))
     SHEET_OBS_SPACE = Box(float("-1"), float("1"), (1, 128, 128, ))
     POWER_OBS_SPACE = Box(float("-1"), float("1"), (1, ))
-    OBSERVATION_SPACE = Box(float("-1"), float("1"), tuple(np.prod(np.array(SHEET_OBS_SPACE.shape)) + np.array(POWER_OBS_SPACE.shape)))
-    ACTION_SPACE = Box(float("-1"), float("1"), (2, ))
+    OBSERVATION_SPACE = Box(float("-1"), float("1"), 
+        tuple(np.prod(np.array(SHEET_OBS_SPACE.shape)) + np.array(POWER_OBS_SPACE.shape) + np.array(ACTION_SPACE.shape)))
+    
 
     MAX_ENERGY = 60
     SPAWN_DICT = {}
@@ -43,6 +45,7 @@ class WorkbookEnv(gym.Env):
         self.template = 0
         self.max_speed = 2.0
         self.energy_reward_coeff = 1.0
+        self.prev_action = None
         
         self.cursor = np.array([
             [0, 0, 0, 1, 0, 0, 0],
@@ -95,6 +98,7 @@ class WorkbookEnv(gym.Env):
 
         self.energy_left = self.max_episode_steps
         self.cursor_vel = np.zeros((2, ), dtype=np.float32)
+        self.prev_action = np.zeros((2, ), dtype=np.float32)
 
         spawn_points = self.SPAWN_DICT.get(state, None)
         if spawn_points is None:
@@ -111,6 +115,7 @@ class WorkbookEnv(gym.Env):
         assert self.energy_left is not None, "Call reset before using step method."
         
         self.cursor_vel = action
+        self.prev_action = action
         action_speed = np.linalg.norm(self.cursor_vel)
         if action_speed > self.max_speed:
             self.cursor_vel *= self.max_speed / action_speed
@@ -152,7 +157,7 @@ class WorkbookEnv(gym.Env):
         obs_slice[mask_slice] = ((230.0 / 127.5) - 1.0)
         
         power_obs = np.array([self.energy_left / self.MAX_ENERGY], np.float32)
-        return np.concatenate((obs.flatten(), power_obs))
+        return np.concatenate((obs.flatten(), power_obs, self.prev_action))
 
     def _get_cursor_pos_int(self):
         return self.cursor_pos.astype(np.int32)
