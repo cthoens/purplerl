@@ -98,13 +98,11 @@ class ContinuousPolicy(StochasticPolicy):
         self.mean_net_output_shape = action_space.shape + (2, )
         self.action_shape = action_space.shape
         self.min_std = min_std.to(cfg.device) if min_std is not None else torch.zeros(self.action_shape, **cfg.tensor_args)
+        self.mean_net_tail = mlp(sizes=list(obs_encoder.shape) + hidden_sizes + [np.prod(np.array(self.mean_net_output_shape))])        
         self.mean_net = nn.Sequential(
             self.obs_encoder,
-            mlp(sizes=list(obs_encoder.shape) + hidden_sizes + [np.prod(np.array(self.mean_net_output_shape))])
+            self.mean_net_tail
         )
-        #log_std_init = -0.5 * torch.ones(*self.mean_net_output_shape, **tensor_args)
-        #self.log_std = torch.nn.Parameter(log_std_init)
-
     
     def action_dist(self, obs):
         out = self.mean_net(obs)
@@ -123,7 +121,6 @@ class ContinuousPolicy(StochasticPolicy):
 
     def load_checkpoint(self, checkpoint):
         self.mean_net.load_state_dict(checkpoint['mean_net_state_dict'])
-        #self.log_std.data = checkpoint['log_std']
 
 
 
@@ -132,7 +129,7 @@ class PolicyUpdater:
     POLICY_LR = "Policy LR"
 
     def __init__(self,
-        policy: StochasticPolicy,
+        policy: ContinuousPolicy,
         experience: ExperienceBufferBase,
         batch_size,
         policy_lr_scheduler: Callable[[], float],
@@ -194,10 +191,6 @@ class PolicyUpdater:
 
 
     def update(self):
-        new_policy_lr = self.policy_lr_scheduler()
-        for g in self.policy_optimizer.param_groups:
-            g['lr'] = new_policy_lr
-        self.stats[self.POLICY_LR] = new_policy_lr
 
         for _ in range(self.policy_epochs):
             self.policy_optimizer.zero_grad()
@@ -249,11 +242,11 @@ class Vanilla(PolicyUpdater):
         self.lam = lam
         self.vf_lr_scheduler = vf_lr_scheduler
         self.vf_epochs = vf_epochs
+        self.value_net_tail = mlp(list(policy.obs_encoder.shape) + hidden_sizes + [1])
         self.value_net = nn.Sequential(
             policy.obs_encoder,
-            mlp(list(policy.obs_encoder.shape) + hidden_sizes + [1])
+            self.value_net_tail
         ).to(cfg.device)
-        self.value_optimizer = torch.optim.Adam(self.value_net.parameters(), lr = vf_lr_scheduler())
         self.value_loss_function = torch.nn.MSELoss()
 
         self.discounted_reward_loader = torch.utils.data.DataLoader(TensorDataset(self.experience.discounted_reward), batch_size=self.batch_size, pin_memory=cfg.pin)
@@ -272,27 +265,7 @@ class Vanilla(PolicyUpdater):
         return self.value_net(obs).squeeze(-1)
 
     def _update_value_function(self):
-        new_value_net_lr = self.vf_lr_scheduler()
-        for g in self.value_optimizer.param_groups:
-            g['lr'] = new_value_net_lr
-        self.stats[self.VALUE_FUNCTION_LR] = new_value_net_lr
-
-        for p in self.policy.obs_encoder.parameters():
-            p.requires_grad=False
-        
-        try:
-            for i in range(self.vf_epochs):
-                for obs, discounted_reward in zip(self.obs_loader, self.discounted_reward_loader):
-                    self.value_optimizer.zero_grad()
-                    obs = obs[0].to(cfg.device)
-                    discounted_reward = discounted_reward[0].to(cfg.device)
-                    value_loss = self._value_loss(obs, discounted_reward)
-                    value_loss.backward()
-                    self.value_optimizer.step()
-            self.stats[self.VALUE_FUNCTION_LOSS] = value_loss.item()
-        finally:
-            for p in self.policy.obs_encoder.parameters():
-                p.requires_grad=True
+       raise NotImplemented
 
 
     def _value_loss(self, obs, discounted_reward):
@@ -329,13 +302,11 @@ class Vanilla(PolicyUpdater):
     def checkpoint(self):
         return super().checkpoint() | {
             'value_net_state_dict': self.value_net.state_dict(),
-            'value_net_optimizer_state_dict': self.value_optimizer.state_dict()
         }
 
 
     def load_checkpoint(self, checkpoint):
         self.value_net.load_state_dict(checkpoint['value_net_state_dict'])
-        self.value_optimizer.load_state_dict(checkpoint['value_net_optimizer_state_dict'])
 
 
 class PPO(Vanilla):    
@@ -346,7 +317,7 @@ class PPO(Vanilla):
     
     def __init__(self,
         hidden_sizes: list,
-        policy: StochasticPolicy,
+        policy: ContinuousPolicy,
         experience: ExperienceBufferBase,
         batch_size,
         policy_lr_scheduler: Callable[[], float],
@@ -361,6 +332,11 @@ class PPO(Vanilla):
         self.clip_ratio = clip_ratio
         self.target_kl = target_kl
         self.vf_only_updates = 0
+        self.policy_optimizer = Adam([
+            {'params': self.policy.obs_encoder.parameters()},
+            {'params': self.policy.mean_net_tail.parameters()},
+            {'params': self.value_net_tail.parameters(), 'lr': vf_lr_scheduler()}
+        ], lr=policy_lr_scheduler())
 
         self.logp_old = torch.zeros(experience.buffer_size, experience.num_envs, **experience.tensor_args)
 
@@ -368,16 +344,6 @@ class PPO(Vanilla):
 
 
     def update(self):
-        new_policy_lr = self.policy_lr_scheduler()
-        for g in self.policy_optimizer.param_groups:
-            g['lr'] = new_policy_lr
-        self.stats[self.POLICY_LR] = new_policy_lr
-
-        new_value_net_lr = self.vf_lr_scheduler()
-        for g in self.value_optimizer.param_groups:
-            g['lr'] = new_value_net_lr
-        self.stats[self.VALUE_FUNCTION_LR] = new_value_net_lr
-
         batch_start = 0
         with torch.no_grad():
             for obs, act in zip(self.obs_loader, self.action_loader):
@@ -386,73 +352,59 @@ class PPO(Vanilla):
                 current_batch_size = obs.shape[0]
                 self.logp_old[batch_start: batch_start+current_batch_size, ...] = self.policy.action_dist(obs).log_prob(act).sum(-1).cpu()
                 batch_start += current_batch_size
-        
-        # Train policy with multiple steps of gradient descent
         max_kl_reached = False
         self.stats[self.POLICY_EPOCHS] = 0
-        for i in range(max(self.policy_epochs, self.vf_epochs)):
-            update_policy = self.vf_only_updates == 0 and i < self.policy_epochs and not max_kl_reached
-            if update_policy:
-                loss_total, kl_total, entropy_total, clip_factor_total = 0, 0, 0, 0
-                loss_count, kl_count, entropy_count, clip_factor_count = 0, 0, 0, 0
-                self.policy_optimizer.zero_grad()
+        for i in range(self.policy_epochs):
+            loss_total, kl_total, entropy_total, clip_factor_total = 0, 0, 0, 0
+            loss_count, kl_count, entropy_count, clip_factor_count = 0, 0, 0, 0
+            self.policy_optimizer.zero_grad()
             for obs, act, adv, logp_old, discounted_reward in zip(self.obs_loader, self.action_loader, self.weight_loader, self.logp_old_loader, self.discounted_reward_loader):
                 # Policy updates                
                 obs = obs[0].to(cfg.device)
-                if update_policy and not max_kl_reached:
-                    act = act[0].to(cfg.device)
-                    adv = adv[0].to(cfg.device)
-                    logp_old = logp_old[0].to(cfg.device)
+                act = act[0].to(cfg.device)
+                adv = adv[0].to(cfg.device)
+                logp_old = logp_old[0].to(cfg.device)
 
-                    policy_loss, kl, entropy, clip_factor = self._policy_loss(logp_old, obs, act, adv)
+                policy_loss, kl, entropy, clip_factor = self._policy_loss(logp_old, obs, act, adv)
 
-                    kl_total += kl.sum().item()
-                    kl_count += np.prod(kl.shape).item()
+                kl_total += kl.sum().item()
+                kl_count += np.prod(kl.shape).item()
 
-                    if kl_total / kl_count > 1.5 * self.target_kl:
-                        max_kl_reached = True
-                    else:
-                        loss_total += policy_loss.sum().item()
-                        loss_count += np.prod(policy_loss.shape).item()
-                        entropy_total += entropy.sum().item()
-                        entropy_count += np.prod(entropy.shape).item()
-                        clip_factor_total += clip_factor.sum().item()
-                        clip_factor_count += np.prod(clip_factor.shape).item()
+                if kl_total / kl_count > 1.5 * self.target_kl:
+                    max_kl_reached = True
+                    break
 
-                        policy_loss.mean().backward()
+                loss_total += policy_loss.sum().item()
+                loss_count += np.prod(policy_loss.shape).item()
+                entropy_total += entropy.sum().item()
+                entropy_count += np.prod(entropy.shape).item()
+                clip_factor_total += clip_factor.sum().item()
+                clip_factor_count += np.prod(clip_factor.shape).item()
 
-                    # free up memory for the value function update
-                    del act
-                    del adv
-                    del policy_loss
-                    del logp_old
-                    del kl
-                    del entropy
-                    del clip_factor
+                policy_loss = policy_loss.mean()
+
+                # free up memory for the value function update
+                del act
+                del adv
+                del logp_old
+                del kl
+                del entropy
+                del clip_factor
 
                 # Value function update
-                if i < self.vf_epochs:
-                    for p in self.policy.obs_encoder.parameters():
-                        p.requires_grad=False
-                    
-                    try:
-                        self.value_optimizer.zero_grad()
-                        discounted_reward = discounted_reward[0].to(cfg.device)
-                        value_loss = self._value_loss(obs, discounted_reward)
-                        value_loss.backward()
-                        self.value_optimizer.step()
-                        value_loss_total = value_loss.item()
-                    finally:
-                        del discounted_reward
-                        del value_loss
-                        for p in self.policy.obs_encoder.parameters():
-                            p.requires_grad=True
+                discounted_reward = discounted_reward[0].to(cfg.device)
+                value_loss = self._value_loss(obs, discounted_reward)
+                
+                del discounted_reward
                                  
-            if update_policy:
-                self.policy_optimizer.step()
-                self.stats[self.POLICY_EPOCHS] += 1
+                loss = policy_loss + 1.0 * value_loss
+                loss.backward()
+            if max_kl_reached:
+                break;
+            self.policy_optimizer.step()
+            self.stats[self.POLICY_EPOCHS] += 1
         
-        self.stats[self.VALUE_FUNCTION_LOSS] = value_loss_total
+        self.stats[self.VALUE_FUNCTION_LOSS] = value_loss.item()
         if self.vf_only_updates == 0:
             self.stats[self.KL] = kl_total / kl_count
             if entropy_count != 0:

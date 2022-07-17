@@ -1,4 +1,6 @@
+import purplerl.workbook_env as Env
 from purplerl.workbook_env import WorkbookEnv
+
 
 import torch
 import numpy as np
@@ -26,7 +28,7 @@ def do_eval(out_dir, epoch, policy, value_net):
             template_idx = template_idx,
             flip = False,
             rot=rot
-        ) for rot in range(4)] for template_idx in range(min(len(env.templates[lesson]), 4))
+        ) for rot in range(4)] for template_idx in range(min(len(Env.TEMPLATES[lesson]), 4))
     ]
 
     plt.rcParams["figure.figsize"] = [18, 18]
@@ -62,7 +64,7 @@ def evaluate(env, state, policy, value_net):
     action_stddevs = np.zeros(spawn_points.shape + env.action_space.shape)
     
     for pt_idx, spawn_point in enumerate(spawn_points):
-        idx = np.unravel_index(spawn_point, env.SHEET_OBS_SPACE.shape)[1:]
+        idx = np.unravel_index(spawn_point, Env.SHEET_OBS_SPACE.shape)[1:]
         env.steps_left = 1
         env.cursor_pos = np.array(idx)
         obs = env._get_obs()
@@ -85,15 +87,24 @@ def visualize(env, sheet, spawn_points, values, action_means, action_stddevs, sc
     sheet = (np.array(sheet) + 1.0) / 2.0
     values_scaled = (values + 1.0) / 2.0
     for pt_idx, spawn_point in enumerate(spawn_points):
-        idx = np.unravel_index(spawn_point, env.SHEET_OBS_SPACE.shape)[1:]
+        idx = np.unravel_index(spawn_point, Env.SHEET_OBS_SPACE.shape)[1:]
         sheet[idx] = values_scaled[pt_idx]
 
     img = Image.fromarray(sheet)
-    act_image = img.resize( (128 * scale, 128 * scale), resample = PIL.Image.NEAREST )
+    act_image = img.resize( np.array(Env.SHEET_OBS_SPACE.shape[1:]) * scale, resample = PIL.Image.NEAREST )
 
     draw = ImageDraw.Draw(act_image)
+
+    for i in range(Env.SHEET_OBS_SPACE.shape[1]):
+        pt_from = np.array([i,0])*scale
+        pt_to =   np.array([i,128])*scale
+        draw.line([tuple(pt_from), tuple(pt_to)], fill=0.5, width=1)
+        pt_from = np.array([0,i])*scale
+        pt_to =   np.array([128,i])*scale
+        draw.line([tuple(pt_from), tuple(pt_to)], fill=0.5, width=1)
+
     for pt_idx, spawn_point in enumerate(spawn_points):
-        idx = np.flip(np.array(np.unravel_index(spawn_point, env.SHEET_OBS_SPACE.shape)[1:]))
+        idx = np.flip(np.array(np.unravel_index(spawn_point, Env.SHEET_OBS_SPACE.shape)[1:]))
 
         direction = np.flip(action_means[pt_idx]) * scale
         center = idx*scale+mid
@@ -132,11 +143,11 @@ def visualize_traj(env, sheet, trajectories, scale = 22):
     sheet = (np.array(sheet) + 1.0) / 2.0
     
     img = Image.fromarray(sheet)
-    act_image = img.resize( (128 * scale, 128 * scale), resample = PIL.Image.NEAREST )
+    act_image = img.resize( np.array(Env.SHEET_OBS_SPACE.shape[1:]) * scale, resample = PIL.Image.NEAREST )
 
     draw = ImageDraw.Draw(act_image)
     
-    for i in range(128):
+    for i in range(Env.SHEET_OBS_SPACE.shape[1]):
         pt_from = np.array([i,0])*scale
         pt_to =   np.array([i,128])*scale
         draw.line([tuple(pt_from), tuple(pt_to)], fill=0.5, width=1)

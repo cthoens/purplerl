@@ -9,6 +9,7 @@ from gym.error import DependencyNotInstalled
 
 from PIL import Image, ImageOps
 
+
 class WorkbookEnv(gym.Env):
 
     metadata = {"render_modes": ["human", "rgb_array"], "render_fps": 50}
@@ -20,28 +21,19 @@ class WorkbookEnv(gym.Env):
     traverse_alpha = 255
 
     SHEET = "sheet"
-    POWER = "power"   
-    ACTION_SPACE = Box(float("-1"), float("1"), (2, ))
-    SHEET_OBS_SPACE = Box(float("-1"), float("1"), (1, 128, 128, ))
-    POWER_OBS_SPACE = Box(float("-1"), float("1"), (1, ))
-    OBSERVATION_SPACE = Box(float("-1"), float("1"), 
-        tuple(np.prod(np.array(SHEET_OBS_SPACE.shape)) + np.array(POWER_OBS_SPACE.shape) + np.array(ACTION_SPACE.shape)))
-    
+    POWER = "power"
 
     MAX_ENERGY = 60
     SPAWN_DICT = {}
 
     def __init__(self, sheet_path="sheets") -> None:
+        init(sheet_path)
         self.sheet_path = sheet_path
         self.screen = None
         self.clock = None
         self.energy_left = None
-        self.lesson_paths = ["l00", "l01", "l02", "l10", "l20", "l30"]
-        self.lesson_lengths = [8, 8, 8, 10, 10, 10]
-        self.sheets = [self._get_sheets(lesson) for lesson in self.lesson_paths]
-        self.templates = [[self._load_template(lesson_path, sheet) for sheet in lesson] for lesson, lesson_path in zip(self.sheets, self.lesson_paths)]
         self.lesson = 0
-        self.max_episode_steps = self.lesson_lengths[self.lesson]
+        self.max_episode_steps = LESSON_LENGTHS[self.lesson]
         self.template = 0
         self.max_speed = 2.0
         self.energy_reward_coeff = 1.0
@@ -63,14 +55,16 @@ class WorkbookEnv(gym.Env):
         self.cursor_pos = None
         self.cursor_vel = None
         
-        self.action_space = self.ACTION_SPACE
-        self.observation_space = self.OBSERVATION_SPACE
+        self.action_space = ACTION_SPACE
+        self.observation_space = OBSERVATION_SPACE
 
 
     def set_lesson(self, lesson):
-        if lesson < len(self.lesson_paths):
+        if lesson < len(LESSON_PATHS):
+            if self.lesson == lesson:
+                return True
             self.lesson = lesson
-            self.max_episode_steps = self.lesson_lengths[lesson]
+            self.max_episode_steps = LESSON_LENGTHS[lesson]
             self.SPAWN_DICT = {}
             return True
         else:
@@ -86,12 +80,12 @@ class WorkbookEnv(gym.Env):
         else:
             state = self.SheetState(
                 lesson = self.lesson,
-                template_idx = int(np.random.uniform(low=0.0, high=len(self.templates[self.lesson]) - 1e-7)),
+                template_idx = int(np.random.uniform(low=0.0, high=len(TEMPLATES[self.lesson]) - 1e-7)),
                 flip = np.random.uniform(low=0.0, high=1.0) > 0.5,
                 rot=int(np.random.uniform(low=0.0, high=4.0))
             )
         
-        self.sheet = np.array(self.templates[state.lesson][state.template_idx])
+        self.sheet = np.array(TEMPLATES[state.lesson][state.template_idx])
         if state.flip:
             self.sheet = np.flip(self.sheet, axis=1)
         self.sheet = np.rot90(self.sheet, k=state.rot)
@@ -105,7 +99,7 @@ class WorkbookEnv(gym.Env):
             spawn_points = self._get_spawn_points(self.sheet)
             self.SPAWN_DICT[state] = spawn_points
 
-        idx = np.unravel_index(spawn_points[np.random.randint(low=0, high=len(spawn_points), size=1)[0]], self.SHEET_OBS_SPACE.shape)
+        idx = np.unravel_index(spawn_points[np.random.randint(low=0, high=len(spawn_points), size=1)[0]], SHEET_OBS_SPACE.shape)
         self.cursor_pos = np.array(idx[1:]) + 0.5
         assert(self._get_pixel() == 1.0)
         return self._get_obs()
@@ -121,7 +115,7 @@ class WorkbookEnv(gym.Env):
             self.cursor_vel *= self.max_speed / action_speed
 
         min_coord = np.array([  0.0,   0.0], dtype=np.float32)
-        max_coord = np.array([127.0, 127.0], dtype=np.float32)
+        max_coord = np.array([SHEET_OBS_SPACE.shape[1]-1.0, SHEET_OBS_SPACE.shape[2]-1.0], dtype=np.float32)
         self.cursor_pos = np.clip(self.cursor_pos + self.cursor_vel, min_coord, max_coord)
         obs = self._get_obs()
         info = {}
@@ -176,8 +170,8 @@ class WorkbookEnv(gym.Env):
                 "pygame is not installed, run `pip install gym[classic_control]`"
             )
 
-        screen_width = 128*4
-        screen_height = 128*4
+        screen_width = SHEET_OBS_SPACE.shape[2] * 4
+        screen_height = SHEET_OBS_SPACE.shape[1] * 4
 
         if self.screen is None:
             pygame.init()
@@ -203,21 +197,53 @@ class WorkbookEnv(gym.Env):
             )
         else:
             return True
+    
 
-    def _load_template(self, lesson_path, name):
-        with Image.open(os.path.join(self.sheet_path, lesson_path,  name)) as image:
+    def _get_spawn_points(self, template):
+        template = template.flatten()
+        return np.where(template == 1.0)[0]
+
+
+ACTION_SPACE = None
+SHEET_OBS_SPACE = None
+POWER_OBS_SPACE = None
+OBSERVATION_SPACE = None
+
+#lesson_paths = ["l00", "l01", "l02", "l10", "l20", "l30"]
+#lesson_lengths = [8, 8, 8, 10, 10, 10]
+LESSON_PATHS = ["l00"]
+LESSON_LENGTHS = [8]
+SHEETS = None
+TEMPLATES = None
+
+def init(sheet_path):
+    global SHEETS, TEMPLATES, ACTION_SPACE, SHEET_OBS_SPACE, POWER_OBS_SPACE, OBSERVATION_SPACE
+    if SHEETS:
+        return
+
+    def _load_template(lesson_path, name):
+        with Image.open(os.path.join(sheet_path, lesson_path,  name)) as image:
             template = np.array(ImageOps.grayscale(image), dtype=np.float32)
             template /= 127.5
             template -= 1.0
         return template
 
-    def _get_sheets(self, lesson):
-        path = os.path.join(self.sheet_path, lesson)
-        return [f for f in os.listdir(path) if os.path.isfile(os.path.join(path, f))]
 
-    def _get_spawn_points(self, template):
-        template = template.flatten()
-        return np.where(template == 1.0)[0]
+    def _get_sheets(lesson):
+            path = os.path.join(sheet_path, lesson)
+            result = [f for f in os.listdir(path) if os.path.isfile(os.path.join(path, f))]
+            result.sort()
+            return result
+
+    SHEETS = [_get_sheets(lesson) for lesson in LESSON_PATHS]
+    TEMPLATES = [[_load_template(lesson_path, sheet) for sheet in lesson] for lesson, lesson_path in zip(SHEETS, LESSON_PATHS)]
+    
+
+    ACTION_SPACE = Box(float("-1"), float("1"), (2, ))
+    SHEET_OBS_SPACE = Box(float("-1"), float("1"), (1, TEMPLATES[0][0].shape[0], TEMPLATES[0][0].shape[1]))
+    POWER_OBS_SPACE = Box(float("-1"), float("1"), (1, ))
+    OBSERVATION_SPACE = Box(float("-1"), float("1"), 
+        tuple(np.prod(np.array(SHEET_OBS_SPACE.shape)) + np.array(POWER_OBS_SPACE.shape) + np.array(ACTION_SPACE.shape)))
 
 
 def test():

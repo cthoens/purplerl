@@ -3,6 +3,7 @@ import gym
 import math
 
 import torch
+import numpy as np
 from torch.nn import Conv2d, Sequential, BatchNorm2d, ReLU, MaxPool2d, Linear, Flatten
 import wandb
 
@@ -12,34 +13,54 @@ from purplerl.environment import GymEnvManager
 from purplerl.policy import ContinuousPolicy, PPO
 from purplerl.config import device
 from purplerl.eval_workbook import do_eval
+from purplerl.resnet import resnet18
+import purplerl.workbook_env as env
 
 class WorkbenchObsEncoder(torch.nn.Module):
     def __init__(self) -> None:
         super().__init__()
 
+        resolution = np.array(list(env.SHEET_OBS_SPACE.shape[1:]), np.int32)
+        resolution //= 2
+        resolution //= 2
+        resolution //= 2
+        resolution //= 2
+        #resnet18(num_classes=128)
         self.cnn_layers = Sequential(
-            # 1024
-            Conv2d(in_channels=1, out_channels=4, kernel_size=3, stride=1, padding=1),
-            BatchNorm2d(4),
+            # 128
+            Conv2d(in_channels=1, out_channels=8, kernel_size=3, stride=1, padding=1),
+            BatchNorm2d(8),
             ReLU(inplace=True),
-            MaxPool2d(kernel_size=2, stride=2),
-            # 512
-            Conv2d(in_channels=4, out_channels=8, kernel_size=3, stride=1, padding=1),
+            Conv2d(in_channels=8, out_channels=8, kernel_size=3, stride=1, padding=1),
             BatchNorm2d(8),
             ReLU(inplace=True),
             MaxPool2d(kernel_size=2, stride=2),
-            # 256
+            # 64
             Conv2d(in_channels=8, out_channels=16, kernel_size=3, stride=1, padding=1),
             BatchNorm2d(16),
             ReLU(inplace=True),
+            Conv2d(in_channels=16, out_channels=16, kernel_size=3, stride=1, padding=1),
+            BatchNorm2d(16),
+            ReLU(inplace=True),
             MaxPool2d(kernel_size=2, stride=2),
-            # 128
+            # 32
             Conv2d(in_channels=16, out_channels=32, kernel_size=3, stride=1, padding=1),
             BatchNorm2d(32),
             ReLU(inplace=True),
+            Conv2d(in_channels=32, out_channels=32, kernel_size=3, stride=1, padding=1),
+            BatchNorm2d(32),
+            ReLU(inplace=True),
+            MaxPool2d(kernel_size=2, stride=2),
+            # 16
+            Conv2d(in_channels=32, out_channels=64, kernel_size=3, stride=1, padding=1),
+            BatchNorm2d(64),
+            ReLU(inplace=True),
+            Conv2d(in_channels=64, out_channels=64, kernel_size=3, stride=1, padding=1),
+            BatchNorm2d(64),
+            ReLU(inplace=True),
             MaxPool2d(kernel_size=2, stride=2),
             Flatten(),
-            Linear(2048, 128)
+            Linear(np.prod(resolution)*64, 128)
         )
 
         self.shape: tuple[int, ...] = (128+1+2, )
@@ -50,7 +71,7 @@ class WorkbenchObsEncoder(torch.nn.Module):
         sheet_obs = obs[...,:-3]        
         extra_obs = obs[...,-3:]
         # flatten buffer dimensions since the cnn only accepts 3D or 4D input
-        x = self.cnn_layers(sheet_obs.reshape(-1, 1, 128, 128))
+        x = self.cnn_layers(sheet_obs.reshape(-1, *env.SHEET_OBS_SPACE.shape))
         # restore the buffer dimension        
         x = x.reshape(*(buffer_dims + [128]))
 
@@ -61,7 +82,7 @@ def run(dev_mode = False):
     phase_config = {
         "phase1": {
             "policy_lr": 1e-4,
-            "vf_lr": 1e-3,
+            "vf_lr": 5e-5,
             "policy_epochs" : 10,
             "vf_epochs": 30,
             "policy_lr_decay": 0.0,
@@ -107,10 +128,10 @@ def run_training(
     target_kl: float = 0.01,
 ):  
     num_envs = 50
-    batch_size = 1900 // num_envs
+    batch_size = 1200 // num_envs
     buffer_size = batch_size * 2
     
-    epochs = 1000
+    epochs = 2000
     save_freq = 50
     
     gym.envs.register(
@@ -196,5 +217,7 @@ if __name__ == '__main__':
 
     import matplotlib
     matplotlib.use('Agg')
+
+    env.init(sheet_path="sheets-64")
 
     run(args.dev)
