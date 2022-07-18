@@ -1,4 +1,3 @@
-from sre_constants import SUCCESS
 import numpy as np
 import torch
 
@@ -67,6 +66,7 @@ class ExperienceBufferBase:
 
         # Calculated data
         self.discounted_reward = torch.zeros(buffer_size, num_envs, **self.tensor_args)
+        self.success = torch.zeros(buffer_size, num_envs, dtype=torch.bool)
 
     def step(self, act: torch.Tensor, reward: torch.Tensor):
         # Update in episode data
@@ -83,7 +83,7 @@ class ExperienceBufferBase:
             if not finished:
                 continue
 
-            self._finish_path(env_idx)
+            self._finish_path(env_idx, success = success[env_idx].item())
 
             self.ep_start_index[env_idx] = self.next_step_index
             self.ep_return[self.ep_count] = self.ep_cum_reward[env_idx]
@@ -108,12 +108,13 @@ class ExperienceBufferBase:
         self.stats[self.DISC_REWARD] = self.mean_disc_reward()
 
     
-    def _finish_path(self, env_idx, last_state_value_estimate:float = 0.0):
+    def _finish_path(self, env_idx, last_state_value_estimate:float = 0.0, success = False):
         self.step_reward_full[self.next_step_index, env_idx] = last_state_value_estimate
         rew_range = range(self.ep_start_index[env_idx], self.next_step_index+1)
         discounted_reward = discount_cumsum(self.step_reward_full[rew_range, env_idx], self.discount)
         ep_range = range(self.ep_start_index[env_idx], self.next_step_index)
         self.discounted_reward[ep_range, env_idx] = torch.tensor(np.array(discounted_reward[:-1]), **self.tensor_args)
+        self.success[ep_range, env_idx] = success
  
 
     # clears the entire buffer

@@ -219,8 +219,8 @@ class GymEnvManager(EnvManager):
         interaction =  [env.step(act.reshape(self.action_space.shape)) for env, act in zip(self.envs, act)]
         obs =  np.array([next_obs for next_obs, _, _, _ in interaction], dtype=np.float32)
         rew =  np.array([rew for _, rew, _, _ in interaction], dtype=np.float32)
-        done = np.array([done for _, _, done, _ in interaction], dtype=np.float32)
-        success = np.array([info.get("success", None) for _, _, _, info in interaction], dtype=np.float32)
+        done = np.array([done for _, _, done, _ in interaction], dtype=np.bool8)
+        success = np.array([info.get("success", False) for _, _, _, info in interaction], dtype=np.bool8)
         for index, (env, env_done) in enumerate(zip(self.envs, done)):
             if not env_done:
                 continue

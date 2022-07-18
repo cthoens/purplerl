@@ -81,8 +81,8 @@ class WorkbenchObsEncoder(torch.nn.Module):
 def run(dev_mode = False):
     phase_config = {
         "phase1": {
-            "policy_lr": 1e-4,
-            "vf_lr": 5e-5,
+            "policy_lr": 5e-5,
+            "vf_lr": 2e-4,
             "policy_epochs" : 10,
             "vf_epochs": 30,
             "policy_lr_decay": 0.0,

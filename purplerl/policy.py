@@ -179,6 +179,11 @@ class PolicyUpdater:
 
             self._finish_path_batch(env_idx, last_state_value_estimate[env_idx])
 
+        if self.experience.success_rate() > 0.5:
+            self.weight[self.experience.success] *= (1.0 - self.experience.success_rate()) * 2
+        else:
+            self.weight[torch.logical_not(self.experience.success)] *= self.experience.success_rate() * 2
+
     def _finish_path_batch(self, env_idx, last_state_value_estimate: float):
         pass
 
@@ -333,10 +338,10 @@ class PPO(Vanilla):
         self.target_kl = target_kl
         self.vf_only_updates = 0
         self.policy_optimizer = Adam([
-            {'params': self.policy.obs_encoder.parameters()},
-            {'params': self.policy.mean_net_tail.parameters()},
+            {'params': self.policy.obs_encoder.parameters(), 'lr': max(vf_lr_scheduler(), policy_lr_scheduler())},
+            {'params': self.policy.mean_net_tail.parameters(), 'lr': policy_lr_scheduler()},
             {'params': self.value_net_tail.parameters(), 'lr': vf_lr_scheduler()}
-        ], lr=policy_lr_scheduler())
+        ])
 
         self.logp_old = torch.zeros(experience.buffer_size, experience.num_envs, **experience.tensor_args)
 
