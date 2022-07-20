@@ -8,29 +8,30 @@ def discount_cumsum(x, discount):
     """
     magic from rllab for computing discounted cumulative sums of vectors.
 
-    input: 
-        vector x, 
-        [x0, 
-         x1, 
+    input:
+        vector x,
+        [x0,
+         x1,
          x2]
 
     output:
-        [x0 + discount * x1 + discount^2 * x2,  
+        [x0 + discount * x1 + discount^2 * x2,
          x1 + discount * x2,
          x2]
     """
     return scipy.signal.lfilter([1], [1, float(-discount)], x[::-1], axis=0)[::-1]
 
 
-class ExperienceBufferBase:
+class ExperienceBuffer:
     MEAN_RETURN = "Mean Return"
     DISC_REWARD = "Disc Reward"
     SUCCESS_RATE = "Success Rate"
     EPISODE_COUNT = "Ep Count"
-    
-    def __init__(self, 
-        num_envs:int, 
-        buffer_size: int, 
+
+    def __init__(self,
+        num_envs:int,
+        buffer_size: int,
+        obs_shape: list[int],
         act_shape: list[int],
         discount: float = 0.99,
         tensor_args = {}
@@ -50,7 +51,7 @@ class ExperienceBufferBase:
         # Overall statistics
         self.ep_count = 0
         self.next_step_index = 0
-        self.ep_success_count = 0 # Number of successfully episodes
+        self.ep_success_count = 0 # Number of successfully completed episodes
         self.ep_success_info_count = 0 # Number of times we have received info about success of failure of an episode
         self.ep_return =  np.zeros(num_envs * buffer_size, dtype=np.float32)
 
@@ -59,6 +60,7 @@ class ExperienceBufferBase:
         self.ep_cum_reward = np.zeros(num_envs, dtype=np.float32)
 
         # Stored data
+        self.obs = torch.zeros(buffer_size, num_envs, *obs_shape, **self.tensor_args)
         self.action = torch.zeros(buffer_size, num_envs, *act_shape, **self.tensor_args)
         # The extra slot at the end of used in buffer_full()
         self.step_reward_full = np.zeros((buffer_size+1, num_envs), dtype=np.float32)
@@ -68,54 +70,65 @@ class ExperienceBufferBase:
         self.discounted_reward = torch.zeros(buffer_size, num_envs, **self.tensor_args)
         self.success = torch.zeros(buffer_size, num_envs, dtype=torch.bool)
 
-    def step(self, act: torch.Tensor, reward: torch.Tensor):
+    def step(self, obs: torch.Tensor, act: torch.Tensor, reward: torch.Tensor):
         # Update in episode data
         self.ep_cum_reward += reward
 
         # Update overall data
+        self.obs[self.next_step_index, :] = obs
         self.action[self.next_step_index, :] = act
         self.step_reward[self.next_step_index, :] = reward
         self.next_step_index += 1
 
-    # accumulates statistics for all finished batches
     def end_episode(self, finished_envs: torch.Tensor = None, success: np.ndarray = None):
+        # Called if at least one environment has finished an episode
+
         for env_idx, finished in enumerate(finished_envs):
             if not finished:
                 continue
 
+            # Calculate stats for each step in the path
             self._finish_path(env_idx, success = success[env_idx].item())
 
-            self.ep_start_index[env_idx] = self.next_step_index
+            # Stats for finished episode
             self.ep_return[self.ep_count] = self.ep_cum_reward[env_idx]
-            self.ep_cum_reward[env_idx] = 0.0
             if success is not None:
                 self.ep_success_info_count += 1
                 if success[env_idx]:
                     self.ep_success_count += 1.0
                 self.stats[self.SUCCESS_RATE] = self.success_rate()
+
+            # Reset for next episode
+            self.ep_start_index[env_idx] = self.next_step_index
+            self.ep_cum_reward[env_idx] = 0.0
             self.ep_count += 1
             self.stats[self.EPISODE_COUNT] = self.ep_count
 
     def buffer_full(self, last_state_value_estimate: torch.tensor):
+        # Called when as many steps as fit into the buffer have been taken
+
         assert(self.next_step_index == self.buffer_size)
         for env_idx in range(self.num_envs):
             # there is nothing to do if this batch just finished an episode
             if self.ep_start_index[env_idx] == self.next_step_index:
                 continue
 
+            # Calculate stats for each step in the path of the unfinished episodes
             self._finish_path(env_idx, last_state_value_estimate[env_idx])
+
         self.stats[self.MEAN_RETURN] = self.mean_return()
         self.stats[self.DISC_REWARD] = self.mean_disc_reward()
 
-    
+
     def _finish_path(self, env_idx, last_state_value_estimate:float = 0.0, success = False):
+        # Calculate stats for each step in a completed path
         self.step_reward_full[self.next_step_index, env_idx] = last_state_value_estimate
         rew_range = range(self.ep_start_index[env_idx], self.next_step_index+1)
         discounted_reward = discount_cumsum(self.step_reward_full[rew_range, env_idx], self.discount)
         ep_range = range(self.ep_start_index[env_idx], self.next_step_index)
         self.discounted_reward[ep_range, env_idx] = torch.tensor(np.array(discounted_reward[:-1]), **self.tensor_args)
         self.success[ep_range, env_idx] = success
- 
+
 
     # clears the entire buffer
     def reset(self):
@@ -125,9 +138,10 @@ class ExperienceBufferBase:
         self.next_step_index = 0
         self.ep_start_index[...] = 0.0
         self.ep_cum_reward[...] = 0.0
-        self.ep_return[...] = 0.0        
+        self.ep_return[...] = 0.0
 
         # This is mostly to create a clean state for unit testing
+        self.obs[...] = 0.0
         self.action[...] = 0.0
         self.step_reward[...] = 0.0
         self.discounted_reward[...] = 0.0
@@ -146,29 +160,3 @@ class ExperienceBufferBase:
 
     def success_rate(self) -> float:
         return self.ep_success_count / self.ep_success_info_count
-
-
-class MonoObsExperienceBuffer(ExperienceBufferBase):
-    def __init__(self, 
-        num_envs:int, 
-        buffer_size: int, 
-        obs_shape: list[int], 
-        act_shape: list[int],
-        discount: float = 0.99,
-        tensor_args: dict = {}
-    ) -> None:
-        super().__init__(num_envs, buffer_size, act_shape, discount, tensor_args)
-        # Stored data
-        self.obs = torch.zeros(buffer_size, num_envs, *obs_shape, **self.tensor_args)
-
-    def step(self, obs: torch.Tensor, act: torch.Tensor, reward: torch.Tensor):
-        self.obs[self.next_step_index, :] = obs
-
-        # Note: Call after updating to prevent self.next_step_index from getting incremented too soon
-        super().step(act, reward)
-
-    # clears the entire buffer
-    def reset(self):
-        super().reset()
-
-        self.obs[...] = 0.0

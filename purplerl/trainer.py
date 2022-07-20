@@ -10,14 +10,10 @@ import numpy as np
 import torch
 import wandb
 from purplerl.environment import EnvManager
-from purplerl.sync_experience_buffer import ExperienceBufferBase, MonoObsExperienceBuffer
-from purplerl.policy import StochasticPolicy, CategoricalPolicy, ContinuousPolicy
-from purplerl.policy import PolicyUpdater, Vanilla
-from purplerl.config import device
-
-
-def to_tensor(input: np.ndarray) -> torch.tensor:
-        return torch.as_tensor(input, dtype=torch.float32, device=device)
+from purplerl.sync_experience_buffer import ExperienceBuffer
+from purplerl.policy import StochasticPolicy, ContinuousPolicy
+from purplerl.policy import PolicyUpdater
+import purplerl.config as cfg
 
 
 class Trainer:
@@ -29,9 +25,9 @@ class Trainer:
     LESSON_START_EPOCH = "lesson_start_epoch"
     EPOCH = "epoch"
 
-    def __init__(self, 
+    def __init__(self,
         env_manager: EnvManager,
-        experience: ExperienceBufferBase,
+        experience: ExperienceBuffer,
         policy: StochasticPolicy,
         policy_updater: PolicyUpdater,
         epochs=50,
@@ -54,7 +50,7 @@ class Trainer:
         os.makedirs(output_dir)
         self.own_stats = {
             self.ENTROPY: -1.0,
-            self.LESSON: 0 
+            self.LESSON: 0
         }
         self.all_stats = {
             self.EXPERIENCE: self.experience.stats,
@@ -73,13 +69,13 @@ class Trainer:
             self.policy_updater.reset()
             action_mean_entropy = torch.empty(self.experience.buffer_size, self.experience.num_envs, dtype=torch.float32)
             with torch.no_grad():
-                obs = to_tensor(self.env_manager.reset())
+                obs = torch.as_tensor(self.env_manager.reset(), **cfg.tensor_args)
                 for step, _ in enumerate(range(self.experience.buffer_size)):
                     act_dist = self.policy.action_dist(obs)
                     act = act_dist.sample()
                     action_mean_entropy[step, :] = act_dist.entropy().mean(-1)
                     next_obs, rew, done, success = self.env_manager.step(act.cpu().numpy())
-                    next_obs = to_tensor(next_obs)
+                    next_obs = torch.as_tensor(next_obs, **cfg.tensor_args)
 
                     self.experience.step(obs, act, rew)
                     self.policy_updater.step()
@@ -90,12 +86,12 @@ class Trainer:
                 last_obs_value_estimate = self.policy_updater.value_estimate(obs).cpu().numpy()
                 self.experience.buffer_full(last_obs_value_estimate)
                 self.policy_updater.buffer_full(last_obs_value_estimate)
-                
+
                 self.own_stats[self.ENTROPY] = action_mean_entropy.mean().item()
-            
+
             experience_duration = time.time() - experience_start_time
-            
-            # train            
+
+            # train
             update_start_time = time.time()
             self.policy_updater.update()
             update_duration = time.time() - update_start_time
@@ -105,12 +101,12 @@ class Trainer:
 
             log_str = ""
             for _, stats in self.all_stats.items():
-                for name, value in stats.items():                
+                for name, value in stats.items():
                     if type(value) == float:
                         log_str += f"{name}: {value:.4f}; "
-                    else: 
+                    else:
                         log_str += f"{name}: {value}; "
-            
+
             print(f"Epoch: {self.epoch:3}; L: {self.lesson}; {log_str} Exp time: {experience_duration:.1f}; Update time: {update_duration:.1f}")
             wandb.log(copy.deepcopy(self.all_stats), step=self.epoch)
             if self.eval_func is not None:
@@ -118,7 +114,7 @@ class Trainer:
                 if plot:
                     wandb.log({"chart": plot})
                     plot.close()
-            
+
 
             # epoch_disc_reward = self.experience.mean_disc_reward()
             # lesson_warmup_phase = self.epoch - self.lesson_start_epoch <= 10
@@ -129,19 +125,17 @@ class Trainer:
             #     max_disc_reward = epoch_disc_reward
             #     max_disc_reward_epoch = self.epoch
 
-            # if self.epoch - max_disc_reward_epoch > 20:               
+            # if self.epoch - max_disc_reward_epoch > 20:
             #     self.lesson += 1
             #     self.lesson_start_epoch = self.epoch + 1
             #     max_disc_reward = float('-inf')
             #     max_disc_reward_epoch = self.epoch + 1
             #     self.own_stats[self.LESSON] = self.lesson
             #     self.save_checkpoint(f"lesson {self.lesson}.pt")
-                
+
             #     has_more_lessons = self.env_manager.set_lesson(self.lesson)
             #     if has_more_lessons:
             #         print(f"Starting lesson {self.lesson}")
-            #         if hasattr(self.policy_updater, 'vf_only_updates'):
-            #             self.policy_updater.vf_only_updates = 2
             #     else:
             #         print(f"Training completed")
             #         return
@@ -151,12 +145,12 @@ class Trainer:
             "policy": self.policy.checkpoint(),
             "policy_updater": self.policy_updater.checkpoint(),
             "trainer": self.checkpoint()
-        } 
+        }
 
         fpath = self.output_dir
         if not fname:
             fname = f"checkpoint{self.epoch}.pt"
-        os.makedirs(fpath, exist_ok=True)        
+        os.makedirs(fpath, exist_ok=True)
         torch.save(full_state, osp.join(fpath, fname))
 
         link_name = f"resume.pt"
@@ -170,13 +164,13 @@ class Trainer:
         self.policy_updater.load_checkpoint(checkpoint["policy_updater"])
         trainer_state = checkpoint["trainer"]
         self.resume_epoch = trainer_state.get(self.EPOCH, 0)+1
-        
+
         self.lesson = trainer_state.get(self.LESSON, 0)
         self.lesson_start_epoch = trainer_state.get(self.LESSON_START_EPOCH, 0)
         self.env_manager.set_lesson(self.lesson)
         self.own_stats[self.LESSON] = self.lesson
 
-    def checkpoint(self):        
+    def checkpoint(self):
         state_dict = {
             self.EPOCH: self.epoch,
             self.LESSON: self.lesson,

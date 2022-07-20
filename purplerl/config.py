@@ -10,7 +10,7 @@ def use_gpu():
     pin = True
 
     tensor_args = {
-        "dtype": torch.float32, 
+        "dtype": torch.float32,
         "device": device
     }
 
@@ -21,7 +21,7 @@ def use_cpu():
     pin = False
 
     tensor_args = {
-        "dtype": torch.float32, 
+        "dtype": torch.float32,
         "device": device
     }
 

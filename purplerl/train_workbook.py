@@ -7,8 +7,8 @@ import numpy as np
 from torch.nn import Conv2d, Sequential, BatchNorm2d, ReLU, MaxPool2d, Linear, Flatten
 import wandb
 
-from purplerl.sync_experience_buffer import ExperienceBufferBase
-from purplerl.trainer import MonoObsExperienceBuffer, Trainer
+from purplerl.sync_experience_buffer import ExperienceBuffer
+from purplerl.trainer import Trainer
 from purplerl.environment import GymEnvManager
 from purplerl.policy import ContinuousPolicy, PPO
 from purplerl.config import device
@@ -25,7 +25,7 @@ class WorkbenchObsEncoder(torch.nn.Module):
         resolution //= 2
         resolution //= 2
         resolution //= 2
-        #resnet18(num_classes=128)
+        #self.cnn_layers = resnet18(num_classes=128)
         self.cnn_layers = Sequential(
             # 128
             Conv2d(in_channels=1, out_channels=8, kernel_size=3, stride=1, padding=1),
@@ -68,11 +68,11 @@ class WorkbenchObsEncoder(torch.nn.Module):
     def forward(self, obs: torch.tensor):
         # Note: obs can be of shape (num_envs, sheet_shape) or (num_envs, buffer_size, sheet_shape)
         buffer_dims = list(obs.shape)[:-1]
-        sheet_obs = obs[...,:-3]        
+        sheet_obs = obs[...,:-3]
         extra_obs = obs[...,-3:]
         # flatten buffer dimensions since the cnn only accepts 3D or 4D input
         x = self.cnn_layers(sheet_obs.reshape(-1, *env.SHEET_OBS_SPACE.shape))
-        # restore the buffer dimension        
+        # restore the buffer dimension
         x = x.reshape(*(buffer_dims + [128]))
 
         return torch.concat((x, extra_obs), -1)
@@ -81,12 +81,9 @@ class WorkbenchObsEncoder(torch.nn.Module):
 def run(dev_mode = False):
     phase_config = {
         "phase1": {
-            "policy_lr": 5e-5,
+            "policy_lr": 2e-5,
             "vf_lr": 2e-4,
-            "policy_epochs" : 10,
-            "vf_epochs": 30,
-            "policy_lr_decay": 0.0,
-            "vf_lr_decay": 0.0,
+            "update_epochs" : 10,
             "discount": 0.95,
             "adv_lambda": 0.95,
             "clip_ratio": 0.2
@@ -94,10 +91,7 @@ def run(dev_mode = False):
         "phase2": {
             "policy_lr": 1e-4,
             "vf_lr": 2.5e-4,
-            "policy_epochs" : 10,
-            "vf_epochs": 20,
-            "policy_lr_decay": 0.0,
-            "vf_lr_decay": 0.0,
+            "update_epochs" : 10,
             "discount": 0.99,
             "adv_lambda": 0.95,
             "clip_ratio": 0.2
@@ -116,24 +110,21 @@ def run_training(
     project_name,
     exp_name,
     policy_lr,
-    policy_epochs,
-    policy_lr_decay,
     vf_lr,
-    vf_epochs,
-    vf_lr_decay,
+    update_epochs,
     discount,
     adv_lambda,
     phase,
     clip_ratio: float = 0.2,
     target_kl: float = 0.01,
-):  
-    num_envs = 50
-    batch_size = 1200 // num_envs
-    buffer_size = batch_size * 2
-    
+):
+    num_envs = 64
+    update_batch_size = 1216 // num_envs
+    buffer_size = update_batch_size * 2
+
     epochs = 2000
     save_freq = 50
-    
+
     gym.envs.register(
         id='workbook-v0',
         entry_point='purplerl.workbook_env:WorkbookEnv',
@@ -144,27 +135,22 @@ def run_training(
     env_manager= GymEnvManager('workbook-v0', num_envs=num_envs)
 
     policy= ContinuousPolicy(
-        obs_encoder=WorkbenchObsEncoder(),
-        hidden_sizes=[128, 128],
+        obs_encoder = WorkbenchObsEncoder(),
+        hidden_sizes = [128, 128],
         action_space = env_manager.action_space,
-        min_std=torch.as_tensor([0.5, 0.5])
+        std_scale = 2.0,
+        min_std= torch.as_tensor([0.5, 0.5])
     ).to(device)
     wandb.watch(policy)
 
-    def policy_lr_scheduler():
-        return policy_lr *  math.exp(-policy_lr_decay * experience.stats[ExperienceBufferBase.SUCCESS_RATE])
-    
-    def value_net_lr_scheduler():
-        return vf_lr *  math.exp(-vf_lr_decay * experience.stats[ExperienceBufferBase.SUCCESS_RATE])
-
-    experience = MonoObsExperienceBuffer(
-        num_envs, 
-        buffer_size, 
-        env_manager.observation_space.shape, 
+    experience = ExperienceBuffer(
+        num_envs,
+        buffer_size,
+        env_manager.observation_space.shape,
         policy.action_shape,
         discount,
         tensor_args = {
-            "dtype": torch.float32, 
+            "dtype": torch.float32,
             "device": torch.device('cpu')
         }
     )
@@ -172,12 +158,11 @@ def run_training(
     policy_updater = PPO(
         policy = policy,
         experience = experience,
-        batch_size = batch_size,
         hidden_sizes = [128, 128],
-        policy_lr_scheduler = policy_lr_scheduler,
-        vf_lr_scheduler = value_net_lr_scheduler,
-        policy_epochs = policy_epochs,
-        vf_epochs = vf_epochs,
+        policy_lr = policy_lr,
+        vf_lr = vf_lr,
+        update_epochs = update_epochs,
+        update_batch_size=update_batch_size,
         lam = adv_lambda,
         clip_ratio = clip_ratio,
         target_kl = target_kl,
@@ -195,8 +180,8 @@ def run_training(
         output_dir= out_dir,
         eval_func = lambda epoch, policy, value_net: do_eval(out_dir, epoch, policy, value_net)
     )
-    
-    checkpoint_path = os.path.join(f"results/{project_name}", f"{phase}-resume.pt")    
+
+    checkpoint_path = os.path.join(f"results/{project_name}", f"{phase}-resume.pt")
     if os.path.exists(checkpoint_path):
         if os.path.islink(checkpoint_path):
             print(f"Resuming from {checkpoint_path}[{os.readlink(checkpoint_path)}]")
