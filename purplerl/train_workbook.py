@@ -178,7 +178,7 @@ def run_training(
         epochs = epochs,
         save_freq = save_freq,
         output_dir= out_dir,
-        eval_func = lambda epoch, policy, value_net: do_eval(out_dir, epoch, policy, value_net)
+        eval_func = lambda epoch, policy_updater: do_eval(out_dir, epoch, policy_updater)
     )
 
     checkpoint_path = os.path.join(f"results/{project_name}", f"{phase}-resume.pt")

@@ -139,7 +139,12 @@ class PolicyUpdater:
     POLICY_LR = "Policy LR"
 
 
-    def __init__(self) -> None:
+    def __init__(self,
+        policy: ContinuousPolicy,
+        experience: ExperienceBuffer
+    ) -> None:
+        self.policy = policy
+        self.experience = experience
         self.stats = {}
 
 
@@ -217,9 +222,7 @@ class PPO(PolicyUpdater):
         clip_ratio: float = 0.2,
         target_kl: float = 0.01,
     ) -> None:
-        super().__init__()
-        self.policy = policy
-        self.experience = experience
+        super().__init__(policy, experience)
 
         self.policy_lr = policy_lr
         self.vf_lr = vf_lr

@@ -2,6 +2,7 @@ import os.path as osp
 
 import torch
 
+dtype = torch.float32
 
 def use_gpu():
     global device, pin, tensor_args
@@ -10,7 +11,7 @@ def use_gpu():
     pin = True
 
     tensor_args = {
-        "dtype": torch.float32,
+        "dtype": dtype,
         "device": device
     }
 
@@ -21,7 +22,7 @@ def use_cpu():
     pin = False
 
     tensor_args = {
-        "dtype": torch.float32,
+        "dtype": dtype,
         "device": device
     }
 

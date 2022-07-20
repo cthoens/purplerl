@@ -107,13 +107,16 @@ class Trainer:
                     else:
                         log_str += f"{name}: {value}; "
 
-            print(f"Epoch: {self.epoch:3}; L: {self.lesson}; {log_str} Exp time: {experience_duration:.1f}; Update time: {update_duration:.1f}")
-            wandb.log(copy.deepcopy(self.all_stats), step=self.epoch)
+            eval_start_time = time.time()
             if self.eval_func is not None:
-                plot = self.eval_func(self.epoch, self.policy, self.policy_updater.value_net)
+                plot = self.eval_func(self.epoch, self.policy_updater)
                 if plot:
                     wandb.log({"chart": plot})
                     plot.close()
+            eval_duration = time.time() - eval_start_time
+
+            print(f"Epoch: {self.epoch:3}; L: {self.lesson}; {log_str} Exp time: {experience_duration:.1f}; Update time: {update_duration:.1f}; Eval time: {eval_duration:.1f}")
+            wandb.log(copy.deepcopy(self.all_stats), step=self.epoch)
 
 
             # epoch_disc_reward = self.experience.mean_disc_reward()
