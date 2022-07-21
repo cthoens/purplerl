@@ -64,31 +64,11 @@ class Trainer:
         #max_disc_reward_epoch = 0
         for self.epoch in range(self.epochs):
             self.epoch += self.resume_epoch
-            experience_start_time = time.time()
-            self.experience.reset()
             self.policy_updater.reset()
-            action_mean_entropy = torch.empty(self.experience.buffer_size, self.experience.num_envs, dtype=torch.float32)
-            with torch.no_grad():
-                obs = torch.as_tensor(self.env_manager.reset(), **cfg.tensor_args)
-                for step, _ in enumerate(range(self.experience.buffer_size)):
-                    act_dist = self.policy.action_dist(obs)
-                    act = act_dist.sample()
-                    action_mean_entropy[step, :] = act_dist.entropy().mean(-1)
-                    next_obs, rew, done, success = self.env_manager.step(act.cpu().numpy())
-                    next_obs = torch.as_tensor(next_obs, **cfg.tensor_args)
 
-                    self.experience.step(obs, act, rew)
-                    self.policy_updater.step()
-                    self.policy_updater.end_episode(done)
-                    self.experience.end_episode(done, success)
-                    obs = next_obs
-
-                last_obs_value_estimate = self.policy_updater.value_estimate(obs).cpu().numpy()
-                self.experience.buffer_full(last_obs_value_estimate)
-                self.policy_updater.buffer_full(last_obs_value_estimate)
-
-                self.own_stats[self.ENTROPY] = action_mean_entropy.mean().item()
-
+            # collect experience
+            experience_start_time = time.time()
+            self._collect_experience()
             experience_duration = time.time() - experience_start_time
 
             # train
@@ -142,6 +122,34 @@ class Trainer:
             #     else:
             #         print(f"Training completed")
             #         return
+
+
+    def _collect_experience(self):
+        self.experience.reset()
+        action_mean_entropy = torch.empty(self.experience.buffer_size, self.experience.num_envs, dtype=torch.float32)
+        with torch.no_grad():
+            obs = torch.as_tensor(self.env_manager.reset(), **cfg.tensor_args)
+            for step, _ in enumerate(range(self.experience.buffer_size)):
+                encoded_obs = self.policy.obs_encoder(obs)
+                act_dist = self.policy.action_dist(encoded_obs = encoded_obs)
+                act = act_dist.sample()
+                action_mean_entropy[step, :] = act_dist.entropy().mean(-1)
+                next_obs, rew, done, success = self.env_manager.step(act.cpu().numpy())
+                next_obs = torch.as_tensor(next_obs, **cfg.tensor_args)
+
+                self.experience.step(obs, act, rew)
+                self.policy_updater.step()
+                self.policy_updater.end_episode(done)
+                self.experience.end_episode(done, success)
+                obs = next_obs
+
+            encoded_obs = self.policy.obs_encoder(obs)
+            last_obs_value_estimate = self.policy_updater.value_estimate(encoded_obs = encoded_obs).cpu().numpy()
+            self.experience.buffer_full(last_obs_value_estimate)
+            self.policy_updater.buffer_full(last_obs_value_estimate)
+
+            self.own_stats[self.ENTROPY] = action_mean_entropy.mean().item()
+
 
     def save_checkpoint(self, fname = None):
         full_state = {

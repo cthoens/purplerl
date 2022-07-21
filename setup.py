@@ -18,8 +18,6 @@ setup(
       'pandas',
       'pytest',
       'psutil',
-      'scipy',
-      'seaborn',
       'torch',
       'tqdm'
    ],

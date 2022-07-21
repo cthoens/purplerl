@@ -186,7 +186,7 @@ class PolicyUpdater:
     def update(self):
         pass
 
-    def value_estimate(self, obs):
+    def value_estimate(self, encoded_obs):
         pass
 
     def checkpoint(self):
@@ -232,11 +232,7 @@ class PPO(PolicyUpdater):
         self.target_kl = target_kl
         self.lam = lam
 
-        self.value_net_tail = mlp(list(policy.obs_encoder.shape) + hidden_sizes + [1])
-        self.value_net = nn.Sequential(
-            policy.obs_encoder,
-            self.value_net_tail
-        ).to(cfg.device)
+        self.value_net_tail = mlp(list(policy.obs_encoder.shape) + hidden_sizes + [1]).to(cfg.device)
 
         self.optimizer = Adam([
             {'params': self.policy.obs_encoder.parameters(), 'lr': max(vf_lr, policy_lr)},
@@ -373,8 +369,8 @@ class PPO(PolicyUpdater):
         return loss, kl, entropy, clip_factor
 
 
-    def value_estimate(self, obs):
-        return self.value_net(obs).squeeze(-1)
+    def value_estimate(self, encoded_obs):
+        return self.value_net_tail(encoded_obs).squeeze(-1)
 
 
     def _value_loss(self, encoded_obs, discounted_reward):
@@ -393,7 +389,8 @@ class PPO(PolicyUpdater):
         obs_device = self.experience.obs[path_slice, env_idx].to(cfg.device)
 
         vals = np.zeros(len(path_slice)+1, dtype=np.float32)
-        vals[:-1] = self.value_net(obs_device).squeeze(-1).cpu().numpy()
+        # TODO: Don't encode obs again here
+        vals[:-1] = self.value_net_tail(self.policy.obs_encoder(obs_device)).squeeze(-1).cpu().numpy()
         vals[-1] = last_state_value_estimate if not reached_terminal_state else 0.0
 
         # estimated reward for state transition = estimated value of next state - estimated value of current state
@@ -410,11 +407,11 @@ class PPO(PolicyUpdater):
 
     def checkpoint(self):
         return {
-            'value_net_state_dict': self.value_net.state_dict(),
+            'value_net_state_dict': self.value_net_tail.state_dict(),
             'optimizer_state_dict': self.optimizer.state_dict()
         }
 
 
     def load_checkpoint(self, checkpoint):
-        self.value_net.load_state_dict(checkpoint['value_net_state_dict'])
+        self.value_net_tail.load_state_dict(checkpoint['value_net_state_dict'])
         self.optimizer.load_state_dict(checkpoint['optimizer_state_dict'])

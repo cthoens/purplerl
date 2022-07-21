@@ -1,10 +1,7 @@
 import os
 import gym
-import math
 
 import torch
-import numpy as np
-from torch.nn import Conv2d, Sequential, BatchNorm2d, ReLU, MaxPool2d, Linear, Flatten
 import wandb
 
 from purplerl.sync_experience_buffer import ExperienceBuffer
@@ -14,54 +11,17 @@ from purplerl.policy import ContinuousPolicy, PPO
 from purplerl.config import device
 from purplerl.eval_workbook import do_eval
 from purplerl.resnet import resnet18
+from purplerl.vision_models import half_unet_v3
 import purplerl.workbook_env as env
 
 class WorkbenchObsEncoder(torch.nn.Module):
     def __init__(self) -> None:
         super().__init__()
 
-        resolution = np.array(list(env.SHEET_OBS_SPACE.shape[1:]), np.int32)
-        resolution //= 2
-        resolution //= 2
-        resolution //= 2
-        resolution //= 2
         #self.cnn_layers = resnet18(num_classes=128)
-        self.cnn_layers = Sequential(
-            # 128
-            Conv2d(in_channels=1, out_channels=8, kernel_size=3, stride=1, padding=1),
-            BatchNorm2d(8),
-            ReLU(inplace=True),
-            Conv2d(in_channels=8, out_channels=8, kernel_size=3, stride=1, padding=1),
-            BatchNorm2d(8),
-            ReLU(inplace=True),
-            MaxPool2d(kernel_size=2, stride=2),
-            # 64
-            Conv2d(in_channels=8, out_channels=16, kernel_size=3, stride=1, padding=1),
-            BatchNorm2d(16),
-            ReLU(inplace=True),
-            Conv2d(in_channels=16, out_channels=16, kernel_size=3, stride=1, padding=1),
-            BatchNorm2d(16),
-            ReLU(inplace=True),
-            MaxPool2d(kernel_size=2, stride=2),
-            # 32
-            Conv2d(in_channels=16, out_channels=32, kernel_size=3, stride=1, padding=1),
-            BatchNorm2d(32),
-            ReLU(inplace=True),
-            Conv2d(in_channels=32, out_channels=32, kernel_size=3, stride=1, padding=1),
-            BatchNorm2d(32),
-            ReLU(inplace=True),
-            MaxPool2d(kernel_size=2, stride=2),
-            # 16
-            Conv2d(in_channels=32, out_channels=64, kernel_size=3, stride=1, padding=1),
-            BatchNorm2d(64),
-            ReLU(inplace=True),
-            Conv2d(in_channels=64, out_channels=64, kernel_size=3, stride=1, padding=1),
-            BatchNorm2d(64),
-            ReLU(inplace=True),
-            MaxPool2d(kernel_size=2, stride=2),
-            Flatten(),
-            Linear(np.prod(resolution)*64, 128)
-        )
+        #self.cnn_layers = half_unet_v1()
+        #self.cnn_layers = half_unet_v2()
+        self.cnn_layers = half_unet_v3()
 
         self.shape: tuple[int, ...] = (128+1+2, )
 
@@ -141,7 +101,6 @@ def run_training(
         std_scale = 2.0,
         min_std= torch.as_tensor([0.5, 0.5])
     ).to(device)
-    wandb.watch(policy)
 
     experience = ExperienceBuffer(
         num_envs,
@@ -167,7 +126,7 @@ def run_training(
         clip_ratio = clip_ratio,
         target_kl = target_kl,
     )
-    wandb.watch(policy_updater.value_net)
+    wandb.watch((policy, policy_updater.value_net_tail), log='all', log_freq=20)
 
     out_dir = f"results/{project_name}/{phase}/{exp_name}"
     trainer = Trainer(

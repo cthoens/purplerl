@@ -117,11 +117,11 @@ def visualize(env, sheet, spawn_points, values, action_means, action_stddevs, sc
         direction = np.flip(action_means[pt_idx]) * scale
         center = idx*scale+mid
         dest = center+direction
-        draw.line([tuple(center), tuple(dest)], fill='white', width=3)
-        draw.ellipse([tuple(center-1), tuple(center+1)], outline='white', width=1)
+        draw.line([tuple(center), tuple(dest)], fill=(0, 0, 196), width=3)
+        draw.ellipse([tuple(center-1), tuple(center+1)], outline=(0, 0, 196), width=1)
 
         std = action_stddevs[pt_idx] * scale
-        draw.ellipse([tuple(dest - std), tuple(dest + std)], outline=(255, 255, 255, 64), width=2)
+        draw.ellipse([tuple(dest - std), tuple(dest + std)], outline=(0, 0, 196), width=2)
 
     crop = crop_rect * scale
     return act_image.crop(tuple(crop.flatten()))
