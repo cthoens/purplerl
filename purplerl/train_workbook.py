@@ -11,7 +11,7 @@ from purplerl.policy import ContinuousPolicy, PPO
 from purplerl.config import device
 from purplerl.eval_workbook import do_eval
 from purplerl.resnet import resnet18
-from purplerl.vision_models import half_unet_v3
+from purplerl.vision_models import half_unet_v1
 import purplerl.workbook_env as env
 
 class WorkbenchObsEncoder(torch.nn.Module):
@@ -19,9 +19,9 @@ class WorkbenchObsEncoder(torch.nn.Module):
         super().__init__()
 
         #self.cnn_layers = resnet18(num_classes=128)
-        #self.cnn_layers = half_unet_v1()
+        self.cnn_layers = half_unet_v1()
         #self.cnn_layers = half_unet_v2()
-        self.cnn_layers = half_unet_v3()
+        #self.cnn_layers = half_unet_v3()
 
         self.shape: tuple[int, ...] = (128+1+2, )
 

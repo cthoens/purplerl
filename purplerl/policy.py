@@ -1,5 +1,4 @@
-from typing import Callable, Tuple
-from xml.dom import InvalidStateErr
+from typing import Tuple
 import numpy as np
 
 import gym
@@ -204,8 +203,8 @@ class PolicyUpdater:
 
 class PPO(PolicyUpdater):
     KL = "KL"
-    ENTROPY = "Entropy"
     POLICY_EPOCHS = "Policy Epochs"
+    VALUE_FUNC_EPOCHS = "VF Epochs"
     CLIP_FACTOR = "Clip Factor"
     VALUE_LOSS = "VF Loss"
     VALUE_FUNCTION_LR = "VF LR"
@@ -263,12 +262,15 @@ class PPO(PolicyUpdater):
 
     def update(self):
         max_kl_reached = False
+        value_loss_dropping = True
         self.stats[self.POLICY_EPOCHS] = 0
+        self.stats[self.VALUE_FUNC_EPOCHS] = 0
 
-        counts = np.zeros(5)
-        totals = torch.zeros(5, requires_grad=False, **cfg.tensor_args)
-        policy_loss_total, value_loss_total, kl_total, entropy_total, clip_factor_total = totals[0:1], totals[1:2], totals[2:3], totals[3:4], totals[4:5]
-        policy_loss_count, value_loss_count, kl_count, entropy_count, clip_factor_count = counts[0:1], counts[1:2], counts[2:3], counts[3:4], counts[4:5]
+        counts = np.zeros(4)
+        totals = torch.zeros(4, requires_grad=False, **cfg.tensor_args)
+        policy_loss_total, value_loss_total, kl_total, clip_factor_total = totals[0:1], totals[1:2], totals[2:3], totals[3:4]
+        policy_loss_count, value_loss_count, kl_count, clip_factor_count = counts[0:1], counts[1:2], counts[2:3], counts[3:4]
+        last_value_loss = float("inf")
 
         for update_epoch in range(self.update_epochs):
             logp_old_batch_start = 0
@@ -293,43 +295,50 @@ class PPO(PolicyUpdater):
                 else:
                     logp_old = logp_old[0].to(cfg.device)
 
-                policy_loss, kl, entropy, clip_factor = self._policy_loss(logp_old, encoded_obs, act, adv)
+                if not max_kl_reached:
+                    policy_loss, kl, clip_factor = self._policy_loss(logp_old, encoded_obs, act, adv)
 
-                kl_total += kl.sum().detach()
-                kl_count += np.prod(kl.shape).item()
+                    kl_total += kl.sum().detach()
+                    kl_count += np.prod(kl.shape).item()
 
-                if abs(kl_total.item() / kl_count) > 1.5 * self.target_kl:
-                    max_kl_reached = True
-                    break
+                    if abs(kl_total.item() / kl_count) > 1.5 * self.target_kl:
+                        max_kl_reached = True
+                    else:
+                        policy_loss_total += policy_loss.sum().detach()
+                        policy_loss_count += np.prod(policy_loss.shape).item()
+                        clip_factor_total += clip_factor.sum().detach()
+                        clip_factor_count += np.prod(clip_factor.shape).item()
 
-                policy_loss_total += policy_loss.sum().detach()
-                policy_loss_count += np.prod(policy_loss.shape).item()
-                entropy_total += entropy.sum().detach()
-                entropy_count += np.prod(entropy.shape).item()
-                clip_factor_total += clip_factor.sum().detach()
-                clip_factor_count += np.prod(clip_factor.shape).item()
+                        policy_loss = policy_loss.mean()
 
-                policy_loss = policy_loss.mean()
+                    del kl
+                    del clip_factor
+
+                if max_kl_reached:
+                    policy_loss = torch.zeros(1, device=cfg.device, requires_grad=False)
+
 
                 # free up memory for the value function update
                 del act
                 del adv
                 del logp_old
-                del kl
-                del entropy
-                del clip_factor
 
                 # Value function update
                 discounted_reward = discounted_reward[0].to(cfg.device, non_blocking=True)
                 value_loss = self._value_loss(encoded_obs, discounted_reward)
+
+                del encoded_obs
+                del discounted_reward
 
                 value_loss_total += value_loss.sum().detach()
                 value_loss_count += np.prod(value_loss.shape).item()
 
                 value_loss = value_loss.mean()
 
-                del encoded_obs
-                del discounted_reward
+                if max_kl_reached and value_loss > last_value_loss:
+                    value_loss_dropping = False
+                    break
+                last_value_loss = value_loss
 
                 loss = policy_loss + 1.0 * value_loss
                 loss.backward()
@@ -338,18 +347,21 @@ class PPO(PolicyUpdater):
                 del value_loss
                 del loss
 
-            if max_kl_reached:
-                break;
+            if not value_loss_dropping:
+                assert(max_kl_reached)
+                break
+
+            self.stats[self.VALUE_FUNC_EPOCHS] += 1
+
+            if not max_kl_reached:
+                self.stats[self.POLICY_EPOCHS] += 1
+                self.stats[self.KL] = kl_total.item() / kl_count.item()
+                if clip_factor_count != 0:
+                    self.stats[self.POLICY_LOSS] = policy_loss_total.item() / policy_loss_count.item()
+                    self.stats[self.CLIP_FACTOR] = clip_factor_total.item() / clip_factor_count.item()
             self.optimizer.step()
 
-            self.stats[self.POLICY_EPOCHS] += 1
             self.stats[self.VALUE_LOSS] = value_loss_total.item() / value_loss_count.item()
-            self.stats[self.KL] = kl_total.item() / kl_count.item()
-            if entropy_count != 0:
-                self.stats[self.POLICY_LOSS] = policy_loss_total.item() / policy_loss_count.item()
-                self.stats[self.ENTROPY] = entropy_total.item() / entropy_count.item()
-                self.stats[self.CLIP_FACTOR] = clip_factor_total.item() / clip_factor_count.item()
-
 
 
     def _policy_loss(self, logp_old, encoded_obs, act, adv) -> Tuple[torch.tensor, float, float, float]:
@@ -362,11 +374,10 @@ class PPO(PolicyUpdater):
 
         # Stats
         kl = logp_old - logp
-        entropy = action_dist.entropy()
         clipped = ratio.gt(1+self.clip_ratio) | ratio.lt(1-self.clip_ratio)
         clip_factor = torch.as_tensor(clipped, dtype=torch.float32)
 
-        return loss, kl, entropy, clip_factor
+        return loss, kl, clip_factor
 
 
     def value_estimate(self, encoded_obs):
