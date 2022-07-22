@@ -204,7 +204,8 @@ class PolicyUpdater:
 class PPO(PolicyUpdater):
     KL = "KL"
     POLICY_EPOCHS = "Policy Epochs"
-    VALUE_FUNC_EPOCHS = "VF Epochs"
+    VF_EPOCHS = "VF Epochs"
+    VF_LOSS_RISE = "VF Loss Rise %"
     CLIP_FACTOR = "Clip Factor"
     VALUE_LOSS = "VF Loss"
     VALUE_FUNCTION_LR = "VF LR"
@@ -262,15 +263,15 @@ class PPO(PolicyUpdater):
 
     def update(self):
         max_kl_reached = False
-        value_loss_dropping = True
         self.stats[self.POLICY_EPOCHS] = 0
-        self.stats[self.VALUE_FUNC_EPOCHS] = 0
+        self.stats[self.VF_EPOCHS] = 0
+        self.stats[self.VF_LOSS_RISE] = 0
 
         counts = np.zeros(4)
         totals = torch.zeros(4, requires_grad=False, **cfg.tensor_args)
         policy_loss_total, value_loss_total, kl_total, clip_factor_total = totals[0:1], totals[1:2], totals[2:3], totals[3:4]
         policy_loss_count, value_loss_count, kl_count, clip_factor_count = counts[0:1], counts[1:2], counts[2:3], counts[3:4]
-        last_value_loss = float("inf")
+        last_epoch_value_loss = float("inf")
 
         for update_epoch in range(self.update_epochs):
             logp_old_batch_start = 0
@@ -303,6 +304,7 @@ class PPO(PolicyUpdater):
 
                     if abs(kl_total.item() / kl_count) > 1.5 * self.target_kl:
                         max_kl_reached = True
+                        last_epoch_value_loss = float("inf")
                     else:
                         policy_loss_total += policy_loss.sum().detach()
                         policy_loss_count += np.prod(policy_loss.shape).item()
@@ -335,11 +337,6 @@ class PPO(PolicyUpdater):
 
                 value_loss = value_loss.mean()
 
-                if max_kl_reached and value_loss > last_value_loss:
-                    value_loss_dropping = False
-                    break
-                last_value_loss = value_loss
-
                 loss = policy_loss + 1.0 * value_loss
                 loss.backward()
 
@@ -347,11 +344,7 @@ class PPO(PolicyUpdater):
                 del value_loss
                 del loss
 
-            if not value_loss_dropping:
-                assert(max_kl_reached)
-                break
-
-            self.stats[self.VALUE_FUNC_EPOCHS] += 1
+            epoch_value_loss = value_loss_total.item() / value_loss_count.item()
 
             if not max_kl_reached:
                 self.stats[self.POLICY_EPOCHS] += 1
@@ -359,9 +352,15 @@ class PPO(PolicyUpdater):
                 if clip_factor_count != 0:
                     self.stats[self.POLICY_LOSS] = policy_loss_total.item() / policy_loss_count.item()
                     self.stats[self.CLIP_FACTOR] = clip_factor_total.item() / clip_factor_count.item()
+            elif epoch_value_loss > last_epoch_value_loss:
+                self.stats[self.VF_LOSS_RISE] = (epoch_value_loss - last_epoch_value_loss) * 100 / last_epoch_value_loss
+                break
+            last_epoch_value_loss = epoch_value_loss
+
             self.optimizer.step()
 
-            self.stats[self.VALUE_LOSS] = value_loss_total.item() / value_loss_count.item()
+            self.stats[self.VF_EPOCHS] += 1
+            self.stats[self.VALUE_LOSS] = epoch_value_loss
 
 
     def _policy_loss(self, logp_old, encoded_obs, act, adv) -> Tuple[torch.tensor, float, float, float]:
