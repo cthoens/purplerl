@@ -128,7 +128,7 @@ class ContinuousPolicy(StochasticPolicy):
 
     def load_checkpoint(self, checkpoint):
         self.action_dist_net.load_state_dict(checkpoint['action_dist_net_state_dict'])
-        self.action_dist_net_tail = list(self.action_dist_net.children)[-2]
+        self.action_dist_net_tail = list(self.action_dist_net.children())[-1]
         self.std_scale = checkpoint['action_dist_std_scale']
 
 

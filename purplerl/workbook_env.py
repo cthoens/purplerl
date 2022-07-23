@@ -38,7 +38,7 @@ class WorkbookEnv(gym.Env):
         self.max_speed = 2.0
         self.energy_reward_coeff = 1.0
         self.prev_action = None
-        
+
         self.cursor = np.array([
             [0, 0, 0, 1, 0, 0, 0],
             [0, 0, 0, 1, 0, 0, 0],
@@ -51,10 +51,10 @@ class WorkbookEnv(gym.Env):
         self.cursor_mask = self.cursor != 0
         self.cursor_hotspot = np.array([3, 3], dtype=np.int32)
         self.cursor_shape = np.array(list(self.cursor.shape), dtype=np.int32)
-        
+
         self.cursor_pos = None
         self.cursor_vel = None
-        
+
         self.action_space = ACTION_SPACE
         self.observation_space = OBSERVATION_SPACE
 
@@ -84,7 +84,7 @@ class WorkbookEnv(gym.Env):
                 flip = np.random.uniform(low=0.0, high=1.0) > 0.5,
                 rot=int(np.random.uniform(low=0.0, high=4.0))
             )
-        
+
         self.sheet = np.array(TEMPLATES[state.lesson][state.template_idx])
         if state.flip:
             self.sheet = np.flip(self.sheet, axis=1)
@@ -107,7 +107,7 @@ class WorkbookEnv(gym.Env):
 
     def step(self, action):
         assert self.energy_left is not None, "Call reset before using step method."
-        
+
         self.cursor_vel = action
         self.prev_action = action
         action_speed = np.linalg.norm(self.cursor_vel)
@@ -140,22 +140,22 @@ class WorkbookEnv(gym.Env):
         obs = np.array(self.sheet)
         cursor_dest_from = self._get_cursor_pos_int() - self.cursor_hotspot
         cursor_dest_to = cursor_dest_from + self.cursor_shape
-        
+
         cursor_src_from = -np.minimum(cursor_dest_from, 0)
         cursor_src_to = self.cursor_shape - np.maximum(cursor_dest_to - self.sheet.shape, 0)
-        
+
         cursor_dest_from = np.maximum(cursor_dest_from, 0)
 
         obs_slice = obs[cursor_dest_from[0] : cursor_dest_to[0], cursor_dest_from[1] : cursor_dest_to[1]]
         mask_slice = self.cursor_mask[cursor_src_from[0] : cursor_src_to[0], cursor_src_from[1] : cursor_src_to[1]]
         obs_slice[mask_slice] = ((230.0 / 127.5) - 1.0)
-        
+
         power_obs = np.array([self.energy_left / self.MAX_ENERGY], np.float32)
         return np.concatenate((obs.flatten(), power_obs, self.prev_action))
 
     def _get_cursor_pos_int(self):
         return self.cursor_pos.astype(np.int32)
-        
+
 
     def _get_pixel(self):
         pos = self._get_cursor_pos_int()
@@ -183,7 +183,7 @@ class WorkbookEnv(gym.Env):
         image = self._get_obs()[:-1].reshape(self.SHEET_OBS_SPACE.shape)
         image += 1.0
         image *= 127.5
-        surf = pygame.surfarray.make_surface(image.astype(np.uint8).squeeze().swapaxes(0, 1))        
+        surf = pygame.surfarray.make_surface(image.astype(np.uint8).squeeze().swapaxes(0, 1))
         surf = pygame.transform.scale(surf, (screen_width, screen_height))
         self.screen.blit(surf, (0, 0))
         if mode == "human":
@@ -197,7 +197,7 @@ class WorkbookEnv(gym.Env):
             )
         else:
             return True
-    
+
 
     def _get_spawn_points(self, template):
         template = template.flatten()
@@ -237,12 +237,12 @@ def init(sheet_path):
 
     SHEETS = [_get_sheets(lesson) for lesson in LESSON_PATHS]
     TEMPLATES = [[_load_template(lesson_path, sheet) for sheet in lesson] for lesson, lesson_path in zip(SHEETS, LESSON_PATHS)]
-    
+
 
     ACTION_SPACE = Box(float("-1"), float("1"), (2, ))
     SHEET_OBS_SPACE = Box(float("-1"), float("1"), (1, TEMPLATES[0][0].shape[0], TEMPLATES[0][0].shape[1]))
     POWER_OBS_SPACE = Box(float("-1"), float("1"), (1, ))
-    OBSERVATION_SPACE = Box(float("-1"), float("1"), 
+    OBSERVATION_SPACE = Box(float("-1"), float("1"),
         tuple(np.prod(np.array(SHEET_OBS_SPACE.shape)) + np.array(POWER_OBS_SPACE.shape) + np.array(ACTION_SPACE.shape)))
 
 
