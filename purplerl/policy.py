@@ -12,7 +12,6 @@ from torch.utils.data import TensorDataset, DataLoader
 
 from torch.optim import Adam
 
-import purplerl.config as cfg
 from purplerl.sync_experience_buffer import ExperienceBuffer, discount_cumsum
 
 
@@ -43,8 +42,8 @@ class StochasticPolicy(nn.Module):
 class CategoricalPolicy(StochasticPolicy):
     def __init__(self,
         obs_encoder: torch.nn.Sequential,
+        action_space: gym.Space,
         hidden_sizes: list[int],
-        action_space: gym.Space
     ) -> None:
         super().__init__(obs_encoder)
 
@@ -67,7 +66,7 @@ class CategoricalPolicy(StochasticPolicy):
         self.logits_net = nn.Sequential(
             self.obs_encoder,
             mlp(sizes = list(obs_encoder.shape) + hidden_sizes + [np.prod(self.distribution_input_shape)] ),
-        ).to(cfg.device)
+        )
 
 
     # make function to compute action distribution
@@ -89,17 +88,21 @@ class CategoricalPolicy(StochasticPolicy):
 class ContinuousPolicy(StochasticPolicy):
     def __init__(self,
         obs_encoder: torch.nn.Module,
-        hidden_sizes: list[int],
         action_space: list[int],
+        hidden_sizes: list[int],
+        output_activation  = nn.Identity,
+        mean_offset: torch.tensor = None,
         min_std: torch.tensor = None,
         std_scale = 2.0
     ) -> None:
         super().__init__(obs_encoder)
         self.action_dist_net_output_shape = action_space.shape + (2, )
         self.action_shape = action_space.shape
+        self.mean_offset = mean_offset if mean_offset is not None else torch.zeros(*self.action_shape)
         self.std_scale = std_scale
-        self.min_std = min_std.to(cfg.device) if min_std is not None else torch.zeros(self.action_shape, **cfg.tensor_args)
-        self.action_dist_net_tail = mlp(sizes=list(obs_encoder.shape) + hidden_sizes + [np.prod(np.array(self.action_dist_net_output_shape))])
+        self.min_std = min_std if min_std is not None else torch.zeros(*self.action_shape)
+        mlp_sizes = list(obs_encoder.shape) + hidden_sizes + [np.prod(np.array(self.action_dist_net_output_shape))]
+        self.action_dist_net_tail = mlp(sizes=mlp_sizes, output_activation=output_activation)
         self.action_dist_net = nn.Sequential(
             self.obs_encoder,
             self.action_dist_net_tail
@@ -116,7 +119,16 @@ class ContinuousPolicy(StochasticPolicy):
         out = out.reshape(shape)
         dist_mean = out[...,0]
         dist_std = torch.max(self.std_scale * torch.exp(out[...,1]), self.min_std)
-        return Normal(loc=dist_mean, scale=dist_std)
+        return Normal(loc=dist_mean + self.mean_offset, scale=dist_std)
+
+
+    def to(self, device):
+        super().to(device)
+
+        self.mean_offset = self.mean_offset.to(device)
+        self.min_std = self.min_std.to(device)
+
+        return self
 
 
     def checkpoint(self):
@@ -167,7 +179,7 @@ class PolicyUpdater:
                 continue
 
             if self.experience.next_step_index==self.experience.ep_start_index[env_idx]:
-                raise InvalidStateErr("policy_updater.end_episode must be called before experience_buffer.end_episode!")
+                raise Exception("policy_updater.end_episode must be called before experience_buffer.end_episode!")
 
             self._end_env_episode(env_idx)
 
@@ -211,6 +223,7 @@ class PPO(PolicyUpdater):
     VALUE_FUNCTION_LR = "VF LR"
 
     def __init__(self,
+        cfg: dict,
         policy: ContinuousPolicy,
         experience: ExperienceBuffer,
         hidden_sizes: list,
@@ -231,6 +244,7 @@ class PPO(PolicyUpdater):
         self.clip_ratio = clip_ratio
         self.target_kl = target_kl
         self.lam = lam
+        self.cfg = cfg
 
         self.value_net_tail = mlp(list(policy.obs_encoder.shape) + hidden_sizes + [1]).to(cfg.device)
 
@@ -255,6 +269,9 @@ class PPO(PolicyUpdater):
 
         # If we have a lot more successes than failures (or opposite) in the buffer scale down the weight of the successes such
         # that the underepresented case gets a stronger influence on the gradient
+        if self.experience.ep_success_info_count == 0 or self.experience.success_rate() == 0.0:
+            return
+
         if self.experience.success_rate() > 0.5:
             self.weight[self.experience.success] *= (1.0 - self.experience.success_rate()) * 2
         else:
@@ -268,7 +285,7 @@ class PPO(PolicyUpdater):
         self.stats[self.VF_LOSS_RISE] = 0
 
         counts = np.zeros(4)
-        totals = torch.zeros(4, requires_grad=False, **cfg.tensor_args)
+        totals = torch.zeros(4, requires_grad=False, **self.cfg.tensor_args)
         policy_loss_total, value_loss_total, kl_total, clip_factor_total = totals[0:1], totals[1:2], totals[2:3], totals[3:4]
         policy_loss_count, value_loss_count, kl_count, clip_factor_count = counts[0:1], counts[1:2], counts[2:3], counts[3:4]
         last_epoch_value_loss = float("inf")
@@ -280,9 +297,9 @@ class PPO(PolicyUpdater):
             self.optimizer.zero_grad(set_to_none=True)
             for obs, act, adv, logp_old, discounted_reward in zip(self.obs_loader, self.action_loader, self.weight_loader, self.logp_old_loader, self.discounted_reward_loader):
                 # Policy updates
-                obs = obs[0].to(cfg.device, non_blocking=True)
-                act = act[0].to(cfg.device, non_blocking=True)
-                adv = adv[0].to(cfg.device, non_blocking=True)
+                obs = obs[0].to(self.cfg.device, non_blocking=True)
+                act = act[0].to(self.cfg.device, non_blocking=True)
+                adv = adv[0].to(self.cfg.device, non_blocking=True)
                 encoded_obs = self.policy.obs_encoder(obs)
                 del obs
 
@@ -294,7 +311,7 @@ class PPO(PolicyUpdater):
                         self.logp_old[batch_range, ...] = logp_old.cpu()
                         logp_old_batch_start += current_batch_size
                 else:
-                    logp_old = logp_old[0].to(cfg.device)
+                    logp_old = logp_old[0].to(self.cfg.device)
 
                 if not max_kl_reached:
                     policy_loss, kl, clip_factor = self._policy_loss(logp_old, encoded_obs, act, adv)
@@ -317,7 +334,7 @@ class PPO(PolicyUpdater):
                     del clip_factor
 
                 if max_kl_reached:
-                    policy_loss = torch.zeros(1, device=cfg.device, requires_grad=False)
+                    policy_loss = torch.zeros(1, device=self.cfg.device, requires_grad=False)
 
 
                 # free up memory for the value function update
@@ -326,7 +343,7 @@ class PPO(PolicyUpdater):
                 del logp_old
 
                 # Value function update
-                discounted_reward = discounted_reward[0].to(cfg.device, non_blocking=True)
+                discounted_reward = discounted_reward[0].to(self.cfg.device, non_blocking=True)
                 value_loss = self._value_loss(encoded_obs, discounted_reward)
 
                 del encoded_obs
@@ -396,7 +413,7 @@ class PPO(PolicyUpdater):
         path_slice = range(self.experience.ep_start_index[env_idx], self.experience.next_step_index)
         rews = self.experience.step_reward[path_slice, env_idx]
 
-        obs_device = self.experience.obs[path_slice, env_idx].to(cfg.device)
+        obs_device = self.experience.obs[path_slice, env_idx].to(self.cfg.device)
 
         vals = np.zeros(len(path_slice)+1, dtype=np.float32)
         # TODO: Don't encode obs again here

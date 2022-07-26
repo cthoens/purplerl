@@ -11,9 +11,8 @@ import torch
 import wandb
 from purplerl.environment import EnvManager
 from purplerl.sync_experience_buffer import ExperienceBuffer
-from purplerl.policy import StochasticPolicy, ContinuousPolicy
+from purplerl.policy import StochasticPolicy
 from purplerl.policy import PolicyUpdater
-import purplerl.config as cfg
 
 
 class Trainer:
@@ -26,6 +25,7 @@ class Trainer:
     EPOCH = "epoch"
 
     def __init__(self,
+        cfg,
         env_manager: EnvManager,
         experience: ExperienceBuffer,
         policy: StochasticPolicy,
@@ -35,6 +35,7 @@ class Trainer:
         output_dir="",
         eval_func=None
     ) -> None:
+        self.cfg = cfg
         self.env_manager = env_manager
         self.experience = experience
         self.policy = policy
@@ -47,7 +48,11 @@ class Trainer:
         self.resume_epoch = 1 # have epochs start at 1 and not 0
         self.eval_func=eval_func
         self.output_dir = output_dir
-        os.makedirs(output_dir)
+        # TODO: At least warn
+        if not os.path.exists(output_dir):
+            os.makedirs(output_dir)
+        self.experience_duration = None
+        self.update_duration = None
         self.own_stats = {
             self.ENTROPY: -1.0,
             self.LESSON: 0
@@ -58,45 +63,23 @@ class Trainer:
             self.TRAINER: self.own_stats
         }
 
+    def set_params(
+        self,
+        policy_lr,
+        vf_lr,
+        update_epochs
+    ):
+        # TODO
+        self.policy_updater.update_epochs = update_epochs
+
 
     def run_training(self):
         #max_disc_reward = float('-inf')
         #max_disc_reward_epoch = 0
         for self.epoch in range(self.epochs):
-            self.epoch += self.resume_epoch
-            self.policy_updater.reset()
-
-            # collect experience
-            experience_start_time = time.time()
-            self._collect_experience()
-            experience_duration = time.time() - experience_start_time
-
-            # train
-            update_start_time = time.time()
-            self.policy_updater.update()
-            update_duration = time.time() - update_start_time
-
-            if (self.epoch > 0 and  self.epoch % self.save_freq == 0) or (self.epoch == self.epochs):
-                self.save_checkpoint()
-
-            log_str = ""
-            for _, stats in self.all_stats.items():
-                for name, value in stats.items():
-                    if type(value) == float:
-                        log_str += f"{name}: {value:.4f}; "
-                    else:
-                        log_str += f"{name}: {value}; "
-
-            eval_start_time = time.time()
-            if self.eval_func is not None:
-                plot = self.eval_func(self.epoch, self.policy_updater)
-                if plot:
-                    wandb.log({"chart": plot})
-                    plot.close()
-            eval_duration = time.time() - eval_start_time
-
-            print(f"Epoch: {self.epoch:3}; L: {self.lesson}; {log_str} Exp time: {experience_duration:.1f}; Update time: {update_duration:.1f}; Eval time: {eval_duration:.1f}")
+            self.run_epoch()
             wandb.log(copy.deepcopy(self.all_stats), step=self.epoch)
+            self.log_to_console()
 
 
             # epoch_disc_reward = self.experience.mean_disc_reward()
@@ -123,19 +106,58 @@ class Trainer:
             #         print(f"Training completed")
             #         return
 
+    def run_epoch(self):
+        self.epoch += self.resume_epoch
+        self.policy_updater.reset()
+
+        # collect experience
+        experience_start_time = time.time()
+        self._collect_experience()
+        self.experience_duration = time.time() - experience_start_time
+
+        # train
+        update_start_time = time.time()
+        self.policy_updater.update()
+        self.update_duration = time.time() - update_start_time
+
+        if (self.epoch > 0 and  self.epoch % self.save_freq == 0) or (self.epoch == self.epochs):
+            self.save_checkpoint()
+
+
+    def log_to_console(self):
+        log_str = ""
+        for _, stats in self.all_stats.items():
+            for name, value in stats.items():
+                if type(value) == float:
+                    log_str += f"{name}: {value:.4f}; "
+                else:
+                    log_str += f"{name}: {value}; "
+
+        eval_start_time = time.time()
+        if self.eval_func is not None:
+            plot = self.eval_func(self.epoch, self.policy_updater)
+            if plot:
+                wandb.log({"chart": plot})
+                plot.close()
+        eval_duration = time.time() - eval_start_time
+
+        print(f"Epoch: {self.epoch:3}; L: {self.lesson}; {log_str} Exp time: {self.experience_duration:.1f}; Update time: {self.update_duration:.1f}; Eval time: {eval_duration:.1f}")
+
 
     def _collect_experience(self):
         self.experience.reset()
         action_mean_entropy = torch.empty(self.experience.buffer_size, self.experience.num_envs, dtype=torch.float32)
-        with torch.no_grad():
-            obs = torch.as_tensor(self.env_manager.reset(), **cfg.tensor_args)
+        self.policy.requires_grad_(False)
+        self.policy_updater.value_net_tail.requires_grad_(False)
+        try:
+            obs = torch.as_tensor(self.env_manager.reset(), **self.cfg.tensor_args)
             for step, _ in enumerate(range(self.experience.buffer_size)):
                 encoded_obs = self.policy.obs_encoder(obs)
                 act_dist = self.policy.action_dist(encoded_obs = encoded_obs)
                 act = act_dist.sample()
                 action_mean_entropy[step, :] = act_dist.entropy().mean(-1)
                 next_obs, rew, done, success = self.env_manager.step(act.cpu().numpy())
-                next_obs = torch.as_tensor(next_obs, **cfg.tensor_args)
+                next_obs = torch.as_tensor(next_obs, **self.cfg.tensor_args)
 
                 self.experience.step(obs, act, rew)
                 self.policy_updater.step()
@@ -149,6 +171,10 @@ class Trainer:
             self.policy_updater.buffer_full(last_obs_value_estimate)
 
             self.own_stats[self.ENTROPY] = action_mean_entropy.mean().item()
+
+        finally:
+            self.policy.requires_grad_(True)
+            self.policy_updater.value_net_tail.requires_grad_(True)
 
 
     def save_checkpoint(self, fname = None):

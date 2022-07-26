@@ -4,26 +4,24 @@ import torch
 
 dtype = torch.float32
 
-def use_gpu():
-    global device, pin, tensor_args
-    device = torch.device('cuda')
+class GpuConfig:
 
-    pin = True
+    def __init__(self) -> None:
+        self.device = torch.device('cuda')
+        self.pin = True
+        self.tensor_args = {
+            "dtype": dtype,
+            "device": self.device
+        }
 
-    tensor_args = {
-        "dtype": dtype,
-        "device": device
-    }
+class CpuConfig():
 
-def use_cpu():
-    global device, pin, tensor_args
-    device = torch.device('cpu')
+    def __init__(self) -> None:
+        self.device = torch.device('cpu')
+        self.pin = False
+        self.tensor_args = {
+            "dtype": dtype,
+            "device": self.device
+        }
 
-    pin = False
 
-    tensor_args = {
-        "dtype": dtype,
-        "device": device
-    }
-
-use_gpu()

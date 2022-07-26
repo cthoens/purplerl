@@ -75,8 +75,8 @@ def half_unet_v2():
             Linear(128, 128)
         )
 
-def half_unet_v1():
-    resolution = np.array(list(Env.SHEET_OBS_SPACE.shape[1:]), np.int32)
+def half_unet_v1(input_resolution, in_channels=1):
+    resolution = input_resolution
     resolution //= 2
     resolution //= 2
     resolution //= 2
@@ -84,7 +84,7 @@ def half_unet_v1():
 
     return Sequential(
             # 128
-            Conv2d(in_channels=1, out_channels=8, kernel_size=3, stride=1, padding=1),
+            Conv2d(in_channels=in_channels, out_channels=8, kernel_size=3, stride=1, padding=1),
             BatchNorm2d(8),
             ReLU(inplace=True),
             Conv2d(in_channels=8, out_channels=8, kernel_size=3, stride=1, padding=1),

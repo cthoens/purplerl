@@ -1,6 +1,10 @@
 import os
 import gym
 
+import random
+import torch
+import numpy as np
+
 import torch
 import wandb
 
@@ -8,18 +12,20 @@ from purplerl.sync_experience_buffer import ExperienceBuffer
 from purplerl.trainer import Trainer
 from purplerl.environment import GymEnvManager
 from purplerl.policy import ContinuousPolicy, PPO
-from purplerl.config import device
+from purplerl.config import GpuConfig
 from purplerl.eval_workbook import do_eval
 from purplerl.resnet import resnet18
 from purplerl.vision_models import half_unet_v1
 import purplerl.workbook_env as env
+
+cfg = GpuConfig()
 
 class WorkbenchObsEncoder(torch.nn.Module):
     def __init__(self) -> None:
         super().__init__()
 
         #self.cnn_layers = resnet18(num_classes=128)
-        self.cnn_layers = half_unet_v1()
+        self.cnn_layers = half_unet_v1(np.array(list(env.SHEET_OBS_SPACE.shape[1:]), np.int32))
         #self.cnn_layers = half_unet_v2()
         #self.cnn_layers = half_unet_v3()
 
@@ -66,15 +72,15 @@ def run(dev_mode = False):
         if project_name=="": project_name = "Dev"
         run_training(project_name, run.name, **wandb.config)
 
-def run_training(
+def create_trainer(
     project_name,
     exp_name,
     policy_lr,
     vf_lr,
     update_epochs,
-    discount,
-    adv_lambda,
-    phase,
+    discount: float = 0.95,
+    adv_lambda: float = 0.95,
+    phase = "phase1",
     clip_ratio: float = 0.2,
     target_kl: float = 0.01,
 ):
@@ -83,24 +89,17 @@ def run_training(
     buffer_size = update_batch_size * 2
 
     epochs = 2000
-    save_freq = 50
+    save_freq = 500
 
-    gym.envs.register(
-        id='workbook-v0',
-        entry_point='purplerl.workbook_env:WorkbookEnv',
-        kwargs={
-        },
-    )
-
-    env_manager= GymEnvManager('workbook-v0', num_envs=num_envs)
+    env_manager= GymEnvManager(env.WorkbookEnv, num_envs=num_envs)
 
     policy= ContinuousPolicy(
         obs_encoder = WorkbenchObsEncoder(),
-        hidden_sizes = [128, 128],
         action_space = env_manager.action_space,
+        hidden_sizes = [128, 128],
         std_scale = 2.0,
         min_std= torch.as_tensor([0.5, 0.5])
-    ).to(device)
+    ).to(cfg.device)
 
     experience = ExperienceBuffer(
         num_envs,
@@ -115,6 +114,7 @@ def run_training(
     )
 
     policy_updater = PPO(
+        cfg = cfg,
         policy = policy,
         experience = experience,
         hidden_sizes = [128, 128],
@@ -130,6 +130,7 @@ def run_training(
 
     out_dir = f"results/{project_name}/{phase}/{exp_name}"
     trainer = Trainer(
+        cfg = cfg,
         env_manager = env_manager,
         experience = experience,
         policy = policy,
@@ -149,15 +150,24 @@ def run_training(
         trainer.load_checkpoint(checkpoint_path)
     else:
         print("****\n**** Starting from scratch !!!\n****")
+    return trainer
 
+def run_training(project_name, exp_name, **kwargs):
+    trainer = create_trainer(project_name, exp_name, **kwargs)
     trainer.run_training()
-    env_manager.close()
+    trainer.env.close()
 
 if __name__ == '__main__':
     import argparse
     parser = argparse.ArgumentParser()
     parser.add_argument('--dev', action='store_true')
     args = parser.parse_args()
+
+    seed = 45632
+    random.seed(seed)
+    torch.manual_seed(seed)
+    np.random.seed(seed)
+
 
     import matplotlib
     matplotlib.use('Agg')

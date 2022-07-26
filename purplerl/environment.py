@@ -183,8 +183,11 @@ class UnityEnvManager(EnvManager):
 
 
 class GymEnvManager(EnvManager):
-    def __init__(self, env_name='CartPole-v0', num_envs=2) -> None:
-        self.envs = [gym.make(env_name) for _ in range(num_envs)]
+    def __init__(self, env='CartPole-v0', num_envs=2) -> None:
+        if callable(env):
+            self.envs = [env() for _ in range(num_envs)]
+        else:
+            self.envs = [gym.make(env) for _ in range(num_envs)]
         self.done = [False for _ in range(num_envs)]
         self.success = [False for _ in range(num_envs)]
         self.observation_space = self.envs[0].observation_space
@@ -229,9 +232,9 @@ class GymEnvManager(EnvManager):
 
     def set_lesson(self, lesson):
         set_lesson = getattr(self.envs[0], "set_lesson", None)
-        if not callable(set_lesson):            
+        if not callable(set_lesson):
             return False
-        
+
         more_lessons = np.array([env.set_lesson(lesson) for env in self.envs])
         assert(np.all(more_lessons == more_lessons[0]))
         return more_lessons[0]
