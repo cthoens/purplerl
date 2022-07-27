@@ -21,8 +21,8 @@ cfg = CpuConfig()
 def run(dev_mode = False):
     phase_config = {
         "phase1": {
-            "policy_lr": 5e-6,
-            "vf_lr": 2e-4,
+            "policy_lr": 2e-5,
+            "vf_lr": 1e-4,
             "update_epochs" : 10,
             "discount": 0.95,
             "adv_lambda": 0.95,

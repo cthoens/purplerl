@@ -11,7 +11,7 @@ from purplerl.tune_env import TuneEnv
 class EnvProcess(Process):
 
     def run(self):
-        seed = 10000 * os.getpid()
+        seed = 1000 * os.getpid()
         random.seed(seed)
         torch.manual_seed(seed)
         np.random.seed(seed)
@@ -82,14 +82,14 @@ class ProcessEnvManager(EnvManager):
         return obs, rew, done, success
 
     def set_lesson(self, lesson):
-        for q in zip(self.in_queues):
+        for q in self.in_queues:
             q.put(('l', lesson))
         more_lessons = np.array([q.get() for q in self.out_queues])
         assert(np.all(more_lessons == more_lessons[0]))
         return more_lessons[0]
 
     def close(self):
-        for q in zip(self.in_queues):
+        for q in self.in_queues:
             q.put(('q'))
         for env in self.envs:
             env.join()

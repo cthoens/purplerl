@@ -48,9 +48,6 @@ class Trainer:
         self.resume_epoch = 1 # have epochs start at 1 and not 0
         self.eval_func=eval_func
         self.output_dir = output_dir
-        # TODO: At least warn
-        if not os.path.exists(output_dir):
-            os.makedirs(output_dir)
         self.experience_duration = None
         self.update_duration = None
         self.own_stats = {

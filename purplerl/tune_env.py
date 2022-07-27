@@ -163,7 +163,7 @@ class TuneEnv(gym.Env):
 
         # add new data to obs
         param_obs = self.obs[0][:self.NUM_PARAMS]
-        param_obs[...] =  action
+        param_obs[...] =  (action * 2.0) - 1.0
 
         # Note: shape[1:] -> skip dummy channel
         stats_obs = self.obs[0][self.NUM_PARAMS:].reshape(self.STATS_OBS_SPACE.shape[1:])
@@ -177,7 +177,10 @@ class TuneEnv(gym.Env):
 
         # TODO: accumulate?
         self.remaining_passes -= 1
-        reward = flattened_stats[ExperienceBuffer.DISC_REWARD]
+        DISC_REWARD_OBS_IDX = 1
+        disc_reward_begin = stats_obs[:3, DISC_REWARD_OBS_IDX].mean()
+        disc_reward_end = stats_obs[-3:, DISC_REWARD_OBS_IDX].mean()
+        reward = np.clip((disc_reward_end - disc_reward_begin) / abs(disc_reward_begin), [-1.0], [1.0]).item()
         return self.obs, reward, self.remaining_passes==0, {}
 
 
