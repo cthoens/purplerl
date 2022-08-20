@@ -151,9 +151,11 @@ class PolicyUpdater:
 
 
     def __init__(self,
+        cfg: dict,
         policy: ContinuousPolicy,
         experience: ExperienceBuffer
     ) -> None:
+        self.cfg = cfg
         self.policy = policy
         self.experience = experience
         self.stats = {}
@@ -235,7 +237,7 @@ class PPO(PolicyUpdater):
         clip_ratio: float = 0.2,
         target_kl: float = 0.01,
     ) -> None:
-        super().__init__(policy, experience)
+        super().__init__(cfg, policy, experience)
 
         self.policy_lr = policy_lr
         self.vf_lr = vf_lr
@@ -244,7 +246,6 @@ class PPO(PolicyUpdater):
         self.clip_ratio = clip_ratio
         self.target_kl = target_kl
         self.lam = lam
-        self.cfg = cfg
 
         self.value_net_tail = mlp(list(policy.obs_encoder.shape) + hidden_sizes + [1]).to(cfg.device)
 

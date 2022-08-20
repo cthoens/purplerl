@@ -1,3 +1,4 @@
+import os
 
 
 import torch
@@ -8,7 +9,7 @@ from matplotlib import pyplot as plt
 import PIL
 from PIL import Image, ImageDraw
 
-import purplerl.config as cfg
+import purplerl.config
 import purplerl.workbook_env as Env
 from purplerl.workbook_env import WorkbookEnv
 from purplerl.policy import PolicyUpdater
@@ -16,7 +17,7 @@ from purplerl.policy import PolicyUpdater
 color_map = plt.get_cmap('RdYlGn')
 
 def do_eval(out_dir, epoch, policy_updater: PolicyUpdater):
-    if epoch % 500 != 0:
+    if epoch % 50 != 0:
         return
 
     lesson = 0
@@ -47,10 +48,11 @@ def do_eval(out_dir, epoch, policy_updater: PolicyUpdater):
                 ax.imshow(act_image_np, cmap='RdYlGn', vmin=0.0, vmax=1.0)
         else:
             for ax, state in zip(plt_row, plt_state):
-                traj, sheet = get_trajectories(env, state, policy_updater.policy)
+                traj, sheet = get_trajectories(env, state, policy_updater)
                 act_image_np = np.array(visualize_traj(env, sheet, traj))
                 ax.imshow(act_image_np, cmap='RdYlGn', vmin=0.0, vmax=1.0)
 
+    os.makedirs(out_dir, exist_ok=True)
     plt.savefig(f"{out_dir}/{epoch}.png")
     return plt
 
@@ -65,14 +67,14 @@ def evaluate(env: WorkbookEnv, state, policy_updater: PolicyUpdater):
     action_stddevs = np.zeros(spawn_points.shape + env.action_space.shape)
 
     with torch.no_grad():
-        obs = torch.zeros(len(spawn_points), *Env.OBSERVATION_SPACE.shape, dtype=cfg.dtype)
+        obs = torch.zeros(len(spawn_points), *Env.OBSERVATION_SPACE.shape, dtype=purplerl.config.dtype)
         for pt_idx, spawn_point in enumerate(spawn_points):
             idx = np.unravel_index(spawn_point, Env.SHEET_OBS_SPACE.shape)[1:]
             env.steps_left = 1
             env.cursor_pos = np.array(idx)
             obs[pt_idx] = torch.as_tensor(env._get_obs())
 
-        obs = torch.as_tensor(obs, **cfg.tensor_args)
+        obs = torch.as_tensor(obs, **policy_updater.cfg.tensor_args)
         encoded_obs = policy_updater.policy.obs_encoder(obs)
         values = policy_updater.value_net_tail(encoded_obs)
         actions_dists = policy_updater.policy.action_dist(encoded_obs=encoded_obs)
@@ -127,7 +129,8 @@ def visualize(env, sheet, spawn_points, values, action_means, action_stddevs, sc
     return act_image.crop(tuple(crop.flatten()))
 
 
-def get_trajectories(env, state, policy):
+def get_trajectories(env, state, policy_updater):
+    policy = policy_updater.policy
     result = []
     for i in range(10):
         obs = env.reset(sheet_state = state)
@@ -135,7 +138,7 @@ def get_trajectories(env, state, policy):
 
         done = False
         while not done:
-            a = policy.act(torch.as_tensor(obs, **cfg.tensor_args))
+            a = policy.act(torch.as_tensor(obs, **policy_updater.cfg.tensor_args))
             obs, _, done, _ = env.step(a.cpu().numpy())
             traj.append(list(env.cursor_pos))
         result.append(np.array(traj))
