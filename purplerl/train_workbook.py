@@ -53,7 +53,7 @@ def run(dev_mode = False):
             "discount": 0.95,
             "adv_lambda": 0.95,
             "clip_ratio": 0.2,
-            "lr_decay": 1.0
+            "lr_decay": 0.9999
         }
     }
     active_phase = "phase1"
