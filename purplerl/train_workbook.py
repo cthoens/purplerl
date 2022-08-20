@@ -53,14 +53,14 @@ def run(dev_mode = False):
             "discount": 0.95,
             "adv_lambda": 0.95,
             "clip_ratio": 0.2,
-            "lr_decay": 0.9999
+            "lr_decay": 1.0
         }
     }
     active_phase = "phase1"
     config = phase_config[active_phase]
     config["phase"] = active_phase
     wandb_mode = "online" if not dev_mode else "disabled"
-    with wandb.init(project="Workbook", config=config, mode=wandb_mode) as run:
+    with wandb.init(project="Workbook", tags=["ExponentialLR"], config=config, mode=wandb_mode) as run:
         project_name = run.project
         if project_name=="": project_name = "Dev"
         run_training(project_name, run.name, **wandb.config)
@@ -82,8 +82,8 @@ def create_trainer(
     update_batch_size = 1216 // num_envs
     buffer_size = update_batch_size * 2
 
-    epochs = 2000
-    save_freq = 500
+    epochs = 1500
+    save_freq = 100
 
     env_manager= GymEnvManager(env.WorkbookEnv, num_envs=num_envs)
 
