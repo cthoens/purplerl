@@ -236,6 +236,7 @@ class PPO(PolicyUpdater):
         lam: float = 0.95,
         clip_ratio: float = 0.2,
         target_kl: float = 0.01,
+        lr_decay: float = 1.0,
     ) -> None:
         super().__init__(cfg, policy, experience)
 
@@ -254,6 +255,7 @@ class PPO(PolicyUpdater):
             {'params': self.policy.action_dist_net_tail.parameters(), 'lr': policy_lr},
             {'params': self.value_net_tail.parameters(), 'lr': vf_lr}
         ])
+        self.scheduler = torch.optim.lr_scheduler.ExponentialLR(optimizer=self.optimizer, gamma=lr_decay)
 
         self.logp_old = torch.zeros(experience.buffer_size, experience.num_envs, **experience.tensor_args)
         self.weight = torch.zeros(experience.buffer_size, experience.num_envs, **experience.tensor_args)
@@ -376,6 +378,7 @@ class PPO(PolicyUpdater):
             last_epoch_value_loss = epoch_value_loss
 
             self.optimizer.step()
+            self.scheduler.step()
 
             self.stats[self.VF_EPOCHS] += 1
             self.stats[self.VALUE_LOSS] = epoch_value_loss
