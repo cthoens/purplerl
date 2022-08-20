@@ -155,7 +155,7 @@ def create_trainer(
 def run_training(project_name, exp_name, **kwargs):
     trainer = create_trainer(project_name, exp_name, **kwargs)
     trainer.run_training()
-    trainer.env.close()
+    trainer.env_manager.close()
 
 if __name__ == '__main__':
     import argparse

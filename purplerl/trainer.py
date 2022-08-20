@@ -60,15 +60,6 @@ class Trainer:
             self.TRAINER: self.own_stats
         }
 
-    def set_params(
-        self,
-        policy_lr,
-        vf_lr,
-        update_epochs
-    ):
-        # TODO
-        self.policy_updater.update_epochs = update_epochs
-
 
     def run_training(self):
         #max_disc_reward = float('-inf')
