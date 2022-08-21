@@ -322,7 +322,6 @@ class PPO(PolicyUpdater):
 
                     if abs(kl_total.item() / kl_count) > 1.5 * self.target_kl:
                         max_kl_reached = True
-                        last_epoch_value_loss = float("inf")
                     else:
                         policy_loss_total += policy_loss.sum().detach()
                         policy_loss_count += np.prod(policy_loss.shape).item()
