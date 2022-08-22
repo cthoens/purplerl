@@ -132,16 +132,16 @@ class ContinuousPolicy(StochasticPolicy):
 
 
     def checkpoint(self):
-        return super().state_dict() | {
-            'action_dist_net_state_dict': self.action_dist_net.state_dict(),
-            'action_dist_std_scale': self.std_scale
+        return {
+            'action_dist_net_state_dict': {k: v.cpu() for k, v in self.action_dist_net.state_dict().items()},
+            #'action_dist_std_scale': self.std_scale
         }
 
 
     def load_checkpoint(self, checkpoint):
         self.action_dist_net.load_state_dict(checkpoint['action_dist_net_state_dict'])
         self.action_dist_net_tail = list(self.action_dist_net.children())[-1]
-        self.std_scale = checkpoint['action_dist_std_scale']
+        #self.std_scale = checkpoint['action_dist_std_scale']
 
 
 
@@ -223,6 +223,7 @@ class PPO(PolicyUpdater):
     CLIP_FACTOR = "Clip Factor"
     VALUE_LOSS = "VF Loss"
     VALUE_FUNCTION_LR = "VF LR"
+    BACKTRACK = "Backtrack"
 
     def __init__(self,
         cfg: dict,
@@ -280,10 +281,15 @@ class PPO(PolicyUpdater):
 
 
     def update(self):
-        max_kl_reached = False
+        update_policy = True
+        update_vf = True
+
+        for key in self.stats:
+            self.stats[key] = None
         self.stats[self.POLICY_EPOCHS] = 0
         self.stats[self.VF_EPOCHS] = 0
         self.stats[self.VF_LOSS_RISE] = 0
+        self.stats[self.BACKTRACK] = 0
 
         counts = np.zeros(4)
         totals = torch.zeros(4, requires_grad=False, **self.cfg.tensor_args)
@@ -291,7 +297,9 @@ class PPO(PolicyUpdater):
         policy_loss_count, value_loss_count, kl_count, clip_factor_count = counts[0:1], counts[1:2], counts[2:3], counts[3:4]
         last_epoch_value_loss = float("inf")
 
-        for update_epoch in range(self.update_epochs):
+        cp = self._full_checkpoint()
+        for update_epoch in range(self.update_epochs+1):
+            validate_only_epoch = update_epoch == self.update_epochs
             logp_old_batch_start = 0
             totals[...] = 0.0
             counts[...] = 0
@@ -299,7 +307,9 @@ class PPO(PolicyUpdater):
             for obs, act, adv, logp_old, discounted_reward in zip(self.obs_loader, self.action_loader, self.weight_loader, self.logp_old_loader, self.discounted_reward_loader):
                 assert(obs[0].shape[0] == self.update_batch_size)
 
-                # Policy updates
+                # Prepare dataset
+                # ---------------
+
                 obs = obs[0].to(self.cfg.device, non_blocking=True)
                 act = act[0].to(self.cfg.device, non_blocking=True)
                 adv = adv[0].to(self.cfg.device, non_blocking=True)
@@ -316,70 +326,116 @@ class PPO(PolicyUpdater):
                 else:
                     logp_old = logp_old[0].to(self.cfg.device)
 
-                if not max_kl_reached:
-                    policy_loss, kl, clip_factor = self._policy_loss(logp_old, encoded_obs, act, adv)
+                # Policy update
+                # -------------
+                # Note: Calculdate even if update_policy == False to check for passive_policy_progression (see below)
 
-                    kl_total += kl.sum().detach()
-                    kl_count += np.prod(kl.shape).item()
+                policy_loss, kl, clip_factor = self._policy_loss(logp_old, encoded_obs, act, adv)
 
-                    if abs(kl_total.item() / kl_count) > 1.5 * self.target_kl:
-                        max_kl_reached = True
-                    else:
-                        policy_loss_total += policy_loss.sum().detach()
-                        policy_loss_count += np.prod(policy_loss.shape).item()
-                        clip_factor_total += clip_factor.sum().detach()
-                        clip_factor_count += np.prod(clip_factor.shape).item()
+                kl_total += kl.sum().detach()
+                kl_count += np.prod(kl.shape).item()
+                policy_loss_total += policy_loss.sum().detach()
+                policy_loss_count += np.prod(policy_loss.shape).item()
+                clip_factor_total += clip_factor.sum().detach()
+                clip_factor_count += np.prod(clip_factor.shape).item()
 
-                        policy_loss = policy_loss.mean()
-
-                    del kl
-                    del clip_factor
-
-                if max_kl_reached:
+                if update_policy:
+                    policy_loss = policy_loss.mean()
+                else:
                     policy_loss = torch.zeros(1, device=self.cfg.device, requires_grad=False)
 
-
                 # free up memory for the value function update
+                del kl
+                del clip_factor
                 del act
                 del adv
                 del logp_old
 
                 # Value function update
+                # ---------------------
+                # Note: Calculdate stats even if update_vf == False to check for passive_vf_progression (see below)
+
                 discounted_reward = discounted_reward[0].to(self.cfg.device, non_blocking=True)
                 value_loss = self._value_loss(encoded_obs, discounted_reward)
-
-                del encoded_obs
                 del discounted_reward
+                del encoded_obs
 
                 value_loss_total += value_loss.sum().detach()
                 value_loss_count += np.prod(value_loss.shape).item()
 
-                value_loss = value_loss.mean()
+                if update_vf:
+                    value_loss = value_loss.mean()
+                else:
+                    value_loss = torch.zeros(1, device=self.cfg.device, requires_grad=False)
 
-                loss = policy_loss + 1.0 * value_loss
-                loss.backward()
+                # Backward pass
+                # -------------
+
+                loss = policy_loss + value_loss
+                if not validate_only_epoch:
+                    loss.backward()
 
                 del policy_loss
                 del value_loss
                 del loss
 
-            epoch_value_loss = value_loss_total.item() / value_loss_count.item()
+            # endif: iterate through dataset batches
 
-            if not max_kl_reached:
+            # whether to roll back policy and vf to state before last update
+            backtrack = False
+
+            # policy has stepped over termination threshold even though its weights were not updated
+            # in the last pass. Can happend because the obs encoder weights are still updated by the
+            # vf update
+            passive_policy_progression = False
+            if abs(kl_total.item() / kl_count) > 1.5 * self.target_kl:
+                passive_policy_progression = not update_policy
+                update_policy = False
+                backtrack = True
+
+            # value function has stepped over termination threshold even though its weights were not
+            # updated in the last pass. Can happend because the obs encoder weights are still updated
+            # by the policy
+            passive_vf_progression = False
+            epoch_value_loss = value_loss_total.item() / value_loss_count.item()
+            #print(epoch_value_loss)
+            if epoch_value_loss > last_epoch_value_loss:
+                #print("->", end="")
+                self.stats[self.VF_LOSS_RISE] = (epoch_value_loss - last_epoch_value_loss) * 100 / last_epoch_value_loss
+                passive_vf_progression = not update_vf
+                update_vf = False
+                backtrack = True
+
+            both_finished = not update_policy and not update_vf
+            if both_finished or passive_policy_progression or passive_vf_progression:
+                #if passive_policy_progression:
+                #    print("p")
+                #if passive_vf_progression:
+                #    print("v")
+                self.stats[self.BACKTRACK] = 1.0
+                self._load_full_checkpoint(cp)
+                return
+
+            if backtrack:
+                self.stats[self.BACKTRACK] = 1.0
+                self._load_full_checkpoint(cp)
+                continue
+
+            if update_policy:
                 self.stats[self.POLICY_EPOCHS] += 1
                 self.stats[self.KL] = kl_total.item() / kl_count.item()
                 if clip_factor_count != 0:
                     self.stats[self.POLICY_LOSS] = policy_loss_total.item() / policy_loss_count.item()
                     self.stats[self.CLIP_FACTOR] = clip_factor_total.item() / clip_factor_count.item()
-            elif epoch_value_loss > last_epoch_value_loss:
-                self.stats[self.VF_LOSS_RISE] = (epoch_value_loss - last_epoch_value_loss) * 100 / last_epoch_value_loss
-                break
-            last_epoch_value_loss = epoch_value_loss
+            if update_vf:
+                last_epoch_value_loss = epoch_value_loss
+                self.stats[self.VF_EPOCHS] += 1
+                self.stats[self.VALUE_LOSS] = epoch_value_loss
 
-            self.optimizer.step()
-
-            self.stats[self.VF_EPOCHS] += 1
-            self.stats[self.VALUE_LOSS] = epoch_value_loss
+            if not validate_only_epoch:
+                #TODO: Net needed right after backtrack
+                cp = self._full_checkpoint()
+                self.optimizer.step()
 
 
     def _policy_loss(self, logp_old, encoded_obs, act, adv) -> Tuple[torch.tensor, float, float, float]:
@@ -436,11 +492,23 @@ class PPO(PolicyUpdater):
 
     def checkpoint(self):
         return {
-            'value_net_state_dict': self.value_net_tail.state_dict(),
-            'optimizer_state_dict': self.optimizer.state_dict()
+            'value_net_state_dict': {k: v.cpu() for k, v in self.value_net_tail.state_dict().items()},
+            #'optimizer_state_dict': {k: v.cpu() for k, v in self.optimizer.state_dict().items()}
         }
 
 
     def load_checkpoint(self, checkpoint):
         self.value_net_tail.load_state_dict(checkpoint['value_net_state_dict'])
-        self.optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
+        #self.optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
+
+    def _full_checkpoint(self):
+        full_state = {
+            "policy": self.policy.checkpoint(),
+            "policy_updater": self.checkpoint(),
+        }
+        return full_state
+
+
+    def _load_full_checkpoint(self, checkpoint):
+        self.policy.load_checkpoint(checkpoint["policy"])
+        self.load_checkpoint(checkpoint["policy_updater"])
