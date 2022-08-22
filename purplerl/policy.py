@@ -297,6 +297,8 @@ class PPO(PolicyUpdater):
             counts[...] = 0
             self.optimizer.zero_grad(set_to_none=True)
             for obs, act, adv, logp_old, discounted_reward in zip(self.obs_loader, self.action_loader, self.weight_loader, self.logp_old_loader, self.discounted_reward_loader):
+                assert(obs[0].shape[0] == self.update_batch_size)
+
                 # Policy updates
                 obs = obs[0].to(self.cfg.device, non_blocking=True)
                 act = act[0].to(self.cfg.device, non_blocking=True)
@@ -305,12 +307,12 @@ class PPO(PolicyUpdater):
                 del obs
 
                 if update_epoch==0:
+                    # Calculate the pre-update log probs. This is done here to reuse the obs that are already encoded
                     with torch.no_grad():
                         logp_old = self.policy.action_dist(encoded_obs=encoded_obs).log_prob(act).sum(-1)
-                        current_batch_size = encoded_obs.shape[0]
-                        batch_range = range(logp_old_batch_start, logp_old_batch_start+current_batch_size)
+                        batch_range = range(logp_old_batch_start, logp_old_batch_start+self.update_batch_size)
                         self.logp_old[batch_range, ...] = logp_old.cpu()
-                        logp_old_batch_start += current_batch_size
+                        logp_old_batch_start += self.update_batch_size
                 else:
                     logp_old = logp_old[0].to(self.cfg.device)
 
