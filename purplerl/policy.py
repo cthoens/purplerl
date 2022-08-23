@@ -222,8 +222,9 @@ class PPO(PolicyUpdater):
     VF_LOSS_RISE = "VF Loss Rise %"
     CLIP_FACTOR = "Clip Factor"
     VALUE_LOSS = "VF Loss"
-    VALUE_FUNCTION_LR = "VF LR"
-    BACKTRACK = "Backtrack"
+    LR_FACTOR = "LR Factor"
+    BACKTRACK_POLICY = "Backtrack Policy"
+    BACKTRACK_VF = "Backtrack VF"
 
     def __init__(self,
         cfg: dict,
@@ -237,6 +238,7 @@ class PPO(PolicyUpdater):
         lam: float = 0.95,
         clip_ratio: float = 0.2,
         target_kl: float = 0.01,
+        lr_decay: float = 0.9,
     ) -> None:
         super().__init__(cfg, policy, experience)
 
@@ -247,6 +249,8 @@ class PPO(PolicyUpdater):
         self.clip_ratio = clip_ratio
         self.target_kl = target_kl
         self.lam = lam
+        self.lr_factor = 1.0
+        self.lr_decay = lr_decay
 
         self.value_net_tail = mlp(list(policy.obs_encoder.shape) + hidden_sizes + [1]).to(cfg.device)
 
@@ -289,7 +293,9 @@ class PPO(PolicyUpdater):
         self.stats[self.POLICY_EPOCHS] = 0
         self.stats[self.VF_EPOCHS] = 0
         self.stats[self.VF_LOSS_RISE] = 0
-        self.stats[self.BACKTRACK] = 0
+        self.stats[self.BACKTRACK_POLICY] = 0
+        self.stats[self.BACKTRACK_VF] = 0
+        self.stats[self.LR_FACTOR] = self.lr_factor
 
         counts = np.zeros(4)
         totals = torch.zeros(4, requires_grad=False, **self.cfg.tensor_args)
@@ -298,7 +304,9 @@ class PPO(PolicyUpdater):
         last_epoch_value_loss = float("inf")
 
         cp = self._full_checkpoint()
+        has_backtracked = False
         for update_epoch in range(self.update_epochs+1):
+            is_first_epoch = update_epoch == 0
             validate_only_epoch = update_epoch == self.update_epochs
             logp_old_batch_start = 0
             totals[...] = 0.0
@@ -316,7 +324,7 @@ class PPO(PolicyUpdater):
                 encoded_obs = self.policy.obs_encoder(obs)
                 del obs
 
-                if update_epoch==0:
+                if is_first_epoch:
                     # Calculate the pre-update log probs. This is done here to reuse the obs that are already encoded
                     with torch.no_grad():
                         logp_old = self.policy.action_dist(encoded_obs=encoded_obs).log_prob(act).sum(-1)
@@ -388,54 +396,73 @@ class PPO(PolicyUpdater):
             # in the last pass. Can happend because the obs encoder weights are still updated by the
             # vf update
             passive_policy_progression = False
-            if abs(kl_total.item() / kl_count) > 1.5 * self.target_kl:
+            epoch_kl = abs(kl_total.item() / kl_count).item()
+            if  epoch_kl > 1.5 * self.target_kl:
+                print("->", end="")
+                self.stats[self.BACKTRACK_POLICY] = 1.0
                 passive_policy_progression = not update_policy
                 update_policy = False
                 backtrack = True
+            else:
+                print("  ", end="")
+            print(f"{epoch_kl:.6f} ", end="")
 
             # value function has stepped over termination threshold even though its weights were not
             # updated in the last pass. Can happend because the obs encoder weights are still updated
             # by the policy
             passive_vf_progression = False
             epoch_value_loss = value_loss_total.item() / value_loss_count.item()
-            #print(epoch_value_loss)
+
             if epoch_value_loss > last_epoch_value_loss:
-                #print("->", end="")
+                print("->", end="")
+                self.stats[self.BACKTRACK_VF] = 1.0
                 self.stats[self.VF_LOSS_RISE] = (epoch_value_loss - last_epoch_value_loss) * 100 / last_epoch_value_loss
                 passive_vf_progression = not update_vf
                 update_vf = False
                 backtrack = True
+            print(f"{epoch_value_loss:.6f}")
 
             both_finished = not update_policy and not update_vf
             if both_finished or passive_policy_progression or passive_vf_progression:
-                #if passive_policy_progression:
-                #    print("p")
-                #if passive_vf_progression:
-                #    print("v")
-                self.stats[self.BACKTRACK] = 1.0
+                has_backtracked = True
                 self._load_full_checkpoint(cp)
+                # Reduce the learning rate if we are already backtracking after the first update
+                if is_first_epoch:
+                    self.lr_factor *= self.lr_decay
+                    for group in self.optimizer.param_groups:
+                        group['lr'] = group['lr'] * self.lr_decay
+                    # TODO: Don't return but backtrack with new LR instead
                 return
 
             if backtrack:
-                self.stats[self.BACKTRACK] = 1.0
+                has_backtracked = True
                 self._load_full_checkpoint(cp)
                 continue
 
-            if update_policy:
+            if update_policy and not is_first_epoch:
                 self.stats[self.POLICY_EPOCHS] += 1
                 self.stats[self.KL] = kl_total.item() / kl_count.item()
                 if clip_factor_count != 0:
                     self.stats[self.POLICY_LOSS] = policy_loss_total.item() / policy_loss_count.item()
                     self.stats[self.CLIP_FACTOR] = clip_factor_total.item() / clip_factor_count.item()
-            if update_vf:
+            if update_vf and not is_first_epoch:
                 last_epoch_value_loss = epoch_value_loss
                 self.stats[self.VF_EPOCHS] += 1
                 self.stats[self.VALUE_LOSS] = epoch_value_loss
 
             if not validate_only_epoch:
-                #TODO: Net needed right after backtrack
+                #TODO: Not needed right after backtrack
                 cp = self._full_checkpoint()
                 self.optimizer.step()
+
+        if not has_backtracked:
+            # find factor such that applying applying it 5 time reverts one decay step
+            decay_revert_steps = 5
+            factor = (1.0 / self.lr_decay)**(1/decay_revert_steps)
+
+            self.lr_factor *= factor
+            for group in self.optimizer.param_groups:
+                group['lr'] = group['lr'] * factor
 
 
     def _policy_loss(self, logp_old, encoded_obs, act, adv) -> Tuple[torch.tensor, float, float, float]:

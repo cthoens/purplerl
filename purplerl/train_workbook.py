@@ -52,7 +52,8 @@ def run(dev_mode = False):
             "update_epochs" : 10,
             "discount": 0.95,
             "adv_lambda": 0.95,
-            "clip_ratio": 0.2
+            "clip_ratio": 0.2,
+            "target_kl": 0.02,
         },
         "phase2": {
             "policy_lr": 1e-4,
@@ -60,7 +61,8 @@ def run(dev_mode = False):
             "update_epochs" : 10,
             "discount": 0.99,
             "adv_lambda": 0.95,
-            "clip_ratio": 0.2
+            "clip_ratio": 0.2,
+            "target_kl": 0.02,
         }
     }
     active_phase = "phase1"
