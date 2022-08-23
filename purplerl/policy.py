@@ -423,7 +423,8 @@ class PPO(PolicyUpdater):
             print(f"{epoch_value_loss:.6f}")
 
             both_finished = not update_policy and not update_vf
-            if both_finished or passive_policy_progression or passive_vf_progression:
+            backtrack_first_update = backtrack and is_first_epoch
+            if backtrack_first_update or both_finished or passive_policy_progression or passive_vf_progression:
                 has_backtracked = True
                 self._load_full_checkpoint(cp)
                 # Reduce the learning rate if we are already backtracking after the first update
