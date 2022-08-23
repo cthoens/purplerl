@@ -285,6 +285,17 @@ class PPO(PolicyUpdater):
 
 
     def update(self):
+        for _ in range(self.update_epochs):
+            if self._do_update():
+                break;
+
+            # Note: Must be done after restoring the checkpoint
+            self.lr_factor *= self.lr_decay
+            print(f"====> {self.lr_factor:.6f}")
+            for group in self.optimizer.param_groups:
+                group['lr'] = group['lr'] * self.lr_decay
+
+    def _do_update(self):
         update_policy = True
         update_vf = True
 
@@ -301,7 +312,7 @@ class PPO(PolicyUpdater):
         totals = torch.zeros(4, requires_grad=False, **self.cfg.tensor_args)
         policy_loss_total, value_loss_total, kl_total, clip_factor_total = totals[0:1], totals[1:2], totals[2:3], totals[3:4]
         policy_loss_count, value_loss_count, kl_count, clip_factor_count = counts[0:1], counts[1:2], counts[2:3], counts[3:4]
-        last_update_value_loss = float("inf")
+        last_epoch_value_loss = float("inf")
 
         cp = self._full_checkpoint()
         has_backtracked = False
@@ -414,10 +425,10 @@ class PPO(PolicyUpdater):
             passive_vf_progression = False
             epoch_value_loss = value_loss_total.item() / value_loss_count.item()
 
-            if epoch_value_loss > last_update_value_loss:
+            if epoch_value_loss > last_epoch_value_loss:
                 print("->", end="")
                 self.stats[self.BACKTRACK_VF] = 1.0
-                self.stats[self.VF_LOSS_RISE] = (epoch_value_loss - last_update_value_loss) * 100 / last_update_value_loss
+                self.stats[self.VF_LOSS_RISE] = (epoch_value_loss - last_epoch_value_loss) * 100 / last_epoch_value_loss
                 passive_vf_progression = not update_vf
                 update_vf = False
                 backtrack = True
@@ -430,12 +441,8 @@ class PPO(PolicyUpdater):
                 self._load_full_checkpoint(cp)
                 # Reduce the learning rate if we are already backtracking after the first update
                 if is_after_first_update:
-                    # Note: Must be done after restoring the checkpoint
-                    self.lr_factor *= self.lr_decay
-                    for group in self.optimizer.param_groups:
-                        group['lr'] = group['lr'] * self.lr_decay
-                    # TODO: Don't return but backtrack with new LR instead
-                return
+                    return False
+                return True
 
             if backtrack:
                 has_backtracked = True
@@ -443,7 +450,7 @@ class PPO(PolicyUpdater):
                 continue
 
             #Note: Update even if update_vf == False because of passive progression check
-            last_update_value_loss = epoch_value_loss
+            last_epoch_value_loss = epoch_value_loss
 
             if update_policy and not is_first_epoch:
                 self.stats[self.POLICY_EPOCHS] += 1
@@ -466,8 +473,11 @@ class PPO(PolicyUpdater):
             factor = (1.0 / self.lr_decay)**(1/decay_revert_steps)
 
             self.lr_factor *= factor
+            print(f"====> {self.lr_factor:.6f}")
             for group in self.optimizer.param_groups:
                 group['lr'] = group['lr'] * factor
+
+        return True
 
 
     def _policy_loss(self, logp_old, encoded_obs, act, adv) -> Tuple[torch.tensor, float, float, float]:
