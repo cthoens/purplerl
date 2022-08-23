@@ -301,14 +301,14 @@ class PPO(PolicyUpdater):
         totals = torch.zeros(4, requires_grad=False, **self.cfg.tensor_args)
         policy_loss_total, value_loss_total, kl_total, clip_factor_total = totals[0:1], totals[1:2], totals[2:3], totals[3:4]
         policy_loss_count, value_loss_count, kl_count, clip_factor_count = counts[0:1], counts[1:2], counts[2:3], counts[3:4]
-        last_epoch_value_loss = float("inf")
+        last_update_value_loss = float("inf")
 
         cp = self._full_checkpoint()
         has_backtracked = False
         for update_epoch in range(self.update_epochs+1):
             is_first_epoch = update_epoch == 0
             is_after_first_update = update_epoch == 1
-            validate_only_epoch = update_epoch == self.update_epochs
+            is_validate_epoch = update_epoch == self.update_epochs
             logp_old_batch_start = 0
             totals[...] = 0.0
             counts[...] = 0
@@ -381,14 +381,14 @@ class PPO(PolicyUpdater):
                 # -------------
 
                 loss = policy_loss + value_loss
-                if not validate_only_epoch:
+                if not is_validate_epoch:
                     loss.backward()
 
                 del policy_loss
                 del value_loss
                 del loss
 
-            # endif: iterate through dataset batches
+            # end for: iterate through dataset batches
 
             # whether to roll back policy and vf to state before last update
             backtrack = False
@@ -414,10 +414,10 @@ class PPO(PolicyUpdater):
             passive_vf_progression = False
             epoch_value_loss = value_loss_total.item() / value_loss_count.item()
 
-            if epoch_value_loss > last_epoch_value_loss:
+            if epoch_value_loss > last_update_value_loss:
                 print("->", end="")
                 self.stats[self.BACKTRACK_VF] = 1.0
-                self.stats[self.VF_LOSS_RISE] = (epoch_value_loss - last_epoch_value_loss) * 100 / last_epoch_value_loss
+                self.stats[self.VF_LOSS_RISE] = (epoch_value_loss - last_update_value_loss) * 100 / last_update_value_loss
                 passive_vf_progression = not update_vf
                 update_vf = False
                 backtrack = True
@@ -443,7 +443,7 @@ class PPO(PolicyUpdater):
                 continue
 
             #Note: Update even if update_vf == False because of passive progression check
-            last_epoch_value_loss = epoch_value_loss
+            last_update_value_loss = epoch_value_loss
 
             if update_policy and not is_first_epoch:
                 self.stats[self.POLICY_EPOCHS] += 1
@@ -455,7 +455,7 @@ class PPO(PolicyUpdater):
                 self.stats[self.VF_EPOCHS] += 1
                 self.stats[self.VALUE_LOSS] = epoch_value_loss
 
-            if not validate_only_epoch:
+            if not is_validate_epoch:
                 #TODO: Not needed right after backtrack
                 cp = self._full_checkpoint()
                 self.optimizer.step()
