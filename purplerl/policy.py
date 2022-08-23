@@ -307,6 +307,7 @@ class PPO(PolicyUpdater):
         has_backtracked = False
         for update_epoch in range(self.update_epochs+1):
             is_first_epoch = update_epoch == 0
+            is_after_first_update = update_epoch == 1
             validate_only_epoch = update_epoch == self.update_epochs
             logp_old_batch_start = 0
             totals[...] = 0.0
@@ -423,12 +424,13 @@ class PPO(PolicyUpdater):
             print(f"{epoch_value_loss:.6f}")
 
             both_finished = not update_policy and not update_vf
-            backtrack_first_update = backtrack and is_first_epoch
-            if backtrack_first_update or both_finished or passive_policy_progression or passive_vf_progression:
+            rollback_first_update = backtrack and is_after_first_update
+            if rollback_first_update or both_finished or passive_policy_progression or passive_vf_progression:
                 has_backtracked = True
                 self._load_full_checkpoint(cp)
                 # Reduce the learning rate if we are already backtracking after the first update
-                if is_first_epoch:
+                if is_after_first_update:
+                    # Note: Must be done after restoring the checkpoint
                     self.lr_factor *= self.lr_decay
                     for group in self.optimizer.param_groups:
                         group['lr'] = group['lr'] * self.lr_decay
@@ -440,6 +442,9 @@ class PPO(PolicyUpdater):
                 self._load_full_checkpoint(cp)
                 continue
 
+            #Note: Update even if update_vf == False because of passive progression check
+            last_epoch_value_loss = epoch_value_loss
+
             if update_policy and not is_first_epoch:
                 self.stats[self.POLICY_EPOCHS] += 1
                 self.stats[self.KL] = kl_total.item() / kl_count.item()
@@ -447,7 +452,6 @@ class PPO(PolicyUpdater):
                     self.stats[self.POLICY_LOSS] = policy_loss_total.item() / policy_loss_count.item()
                     self.stats[self.CLIP_FACTOR] = clip_factor_total.item() / clip_factor_count.item()
             if update_vf and not is_first_epoch:
-                last_epoch_value_loss = epoch_value_loss
                 self.stats[self.VF_EPOCHS] += 1
                 self.stats[self.VALUE_LOSS] = epoch_value_loss
 
@@ -521,13 +525,13 @@ class PPO(PolicyUpdater):
     def checkpoint(self):
         return {
             'value_net_state_dict': {k: v.cpu() for k, v in self.value_net_tail.state_dict().items()},
-            #'optimizer_state_dict': {k: v.cpu() for k, v in self.optimizer.state_dict().items()}
+            'optimizer_state_dict': self.optimizer.state_dict(),
         }
 
 
     def load_checkpoint(self, checkpoint):
         self.value_net_tail.load_state_dict(checkpoint['value_net_state_dict'])
-        #self.optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
+        self.optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
 
     def _full_checkpoint(self):
         full_state = {
