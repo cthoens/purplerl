@@ -87,7 +87,7 @@ def create_trainer(
     target_kl: float = 0.01,
 ):
     num_envs = 64
-    update_batch_size = 1216 // num_envs
+    update_batch_size = 1216 // num_envs  # 1856
     buffer_size = update_batch_size * 2
 
     epochs = 2000

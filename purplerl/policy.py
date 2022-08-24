@@ -242,8 +242,8 @@ class PPO(PolicyUpdater):
     ) -> None:
         super().__init__(cfg, policy, experience)
 
-        self.policy_lr = policy_lr
-        self.vf_lr = vf_lr
+        self.initial_policy_lr = policy_lr
+        self.initial_vf_lr = vf_lr
         self.update_epochs = update_epochs
         self.update_batch_size = update_batch_size
         self.clip_ratio = clip_ratio
@@ -285,15 +285,25 @@ class PPO(PolicyUpdater):
 
 
     def update(self):
-        for _ in range(self.update_epochs):
+        for _ in range(self.update_epochs // 2):
             if self._do_update():
-                break;
+                return
 
             # Note: Must be done after restoring the checkpoint
             self.lr_factor *= self.lr_decay
             print(f"====> {self.lr_factor:.6f}")
             for group in self.optimizer.param_groups:
                 group['lr'] = group['lr'] * self.lr_decay
+
+            # reset the optimizer to make sure momentum does not keep driving
+            # the parameters into the wrong direction
+            vf_lr = self.initial_vf_lr * self.lr_factor
+            policy_lr = self.initial_policy_lr * self.lr_factor
+            self.optimizer = Adam([
+                {'params': self.policy.obs_encoder.parameters(), 'lr': max(vf_lr, policy_lr)},
+                {'params': self.policy.action_dist_net_tail.parameters(), 'lr': policy_lr},
+                {'params': self.value_net_tail.parameters(), 'lr': vf_lr}
+            ])
 
     def _do_update(self):
         update_policy = True
@@ -362,7 +372,7 @@ class PPO(PolicyUpdater):
                 if update_policy:
                     policy_loss = policy_loss.mean()
                 else:
-                    policy_loss = torch.zeros(1, device=self.cfg.device, requires_grad=False)
+                    policy_loss = 0.1 * policy_loss.mean()
 
                 # free up memory for the value function update
                 del kl
@@ -386,7 +396,7 @@ class PPO(PolicyUpdater):
                 if update_vf:
                     value_loss = value_loss.mean()
                 else:
-                    value_loss = torch.zeros(1, device=self.cfg.device, requires_grad=False)
+                    value_loss = 0.1 * value_loss.mean()
 
                 # Backward pass
                 # -------------
@@ -469,7 +479,7 @@ class PPO(PolicyUpdater):
 
         if not has_backtracked:
             # find factor such that applying applying it 5 time reverts one decay step
-            decay_revert_steps = 5
+            decay_revert_steps = 3
             factor = (1.0 / self.lr_decay)**(1/decay_revert_steps)
 
             self.lr_factor *= factor
