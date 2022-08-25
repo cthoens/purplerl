@@ -36,21 +36,16 @@ def do_eval(out_dir, epoch, policy_updater: PolicyUpdater):
     plt.rcParams["figure.figsize"] = [18, 18]
     plt.rcParams["figure.autolayout"] = True
 
-    _, axs = plt.subplots(len(states)*2, len(states[0]))
+    _, axs = plt.subplots(len(states), len(states[0]))
     if len(states)==1:
         axs = [axs]
     for row, plt_row in enumerate(axs):
-        plt_state = states[row//2]
-        if row % 2 == 0:
-            for ax, state in zip(plt_row, plt_state):
-                sheet, spawn_points, values, action_means, action_stddevs = evaluate(env, state, policy_updater)
-                act_image_np = np.array(visualize(env, sheet, spawn_points, values, action_means, action_stddevs))
-                ax.imshow(act_image_np, cmap='RdYlGn', vmin=0.0, vmax=1.0)
-        else:
-            for ax, state in zip(plt_row, plt_state):
-                traj, sheet = get_trajectories(env, state, policy_updater)
-                act_image_np = np.array(visualize_traj(env, sheet, traj))
-                ax.imshow(act_image_np, cmap='RdYlGn', vmin=0.0, vmax=1.0)
+        plt_state = states[row]
+
+        for ax, state in zip(plt_row, plt_state):
+            sheet, spawn_points, values, action_means, action_stddevs = evaluate(env, state, policy_updater)
+            act_image_np = np.array(visualize(env, sheet, spawn_points, values, action_means, action_stddevs))
+            ax.imshow(act_image_np, cmap='RdYlGn', vmin=0.0, vmax=1.0)
 
     os.makedirs(out_dir, exist_ok=True)
     plt.savefig(f"{out_dir}/{epoch}.png")
@@ -128,56 +123,6 @@ def visualize(env, sheet, spawn_points, values, action_means, action_stddevs, sc
     crop = crop_rect * scale
     return act_image.crop(tuple(crop.flatten()))
 
-
-def get_trajectories(env, state, policy_updater):
-    policy = policy_updater.policy
-    result = []
-    for i in range(10):
-        obs = env.reset(sheet_state = state)
-        traj = [list(env.cursor_pos)]
-
-        done = False
-        while not done:
-            a = policy.act(torch.as_tensor(obs, **policy_updater.cfg.tensor_args))
-            obs, _, done, _ = env.step(a.cpu().numpy())
-            traj.append(list(env.cursor_pos))
-        result.append(np.array(traj))
-
-    return result, env.sheet
-
-
-def visualize_traj(env, sheet, trajectories, scale = 22):
-    crop_rect = find_crop(env.sheet)
-    crop_rect[0] -= int(env.max_speed)
-    crop_rect[1] += int(env.max_speed)
-
-    sheet = (np.array(sheet) + 1.0) / 2.0
-
-    img = Image.fromarray(sheet)
-    act_image = img.resize( np.array(Env.SHEET_OBS_SPACE.shape[1:]) * scale, resample = PIL.Image.NEAREST )
-
-    draw = ImageDraw.Draw(act_image)
-
-    for i in range(Env.SHEET_OBS_SPACE.shape[1]):
-        pt_from = np.array([i,0])*scale
-        pt_to =   np.array([i,128])*scale
-        draw.line([tuple(pt_from), tuple(pt_to)], fill=0.5, width=1)
-        pt_from = np.array([0,i])*scale
-        pt_to =   np.array([128,i])*scale
-        draw.line([tuple(pt_from), tuple(pt_to)], fill=0.5, width=1)
-
-    for traj in trajectories:
-        traj = np.flip(traj, -1)
-        pt_from = traj[0] * scale
-        for pt_to in traj[1:]:
-            pt_to *= scale
-            draw.line([tuple(pt_from), tuple(pt_to)], fill=0.5, width=4)
-            draw.ellipse([tuple(pt_from-4), tuple(pt_from+4)], outline=0.5, width=6)
-
-            pt_from = pt_to
-
-    crop = crop_rect * scale
-    return act_image.crop(tuple(crop.flatten()))
 
 def find_crop(img):
     for y in range(img.shape[0]):
