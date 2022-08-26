@@ -432,7 +432,7 @@ class PPO(PolicyUpdater):
                 if clip_factor_count != 0:
                     self.stats[self.POLICY_LOSS] = policy_loss_total.item() / policy_loss_count.item()
                     self.stats[self.CLIP_FACTOR] = clip_factor_total.item() / clip_factor_count.item()
-            if is_first_epoch:
+            if not is_first_epoch:
                 self.stats[self.VF_EPOCHS] += 1
                 self.stats[self.VALUE_LOSS] = epoch_value_loss
 
