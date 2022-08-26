@@ -423,7 +423,6 @@ class PPO(PolicyUpdater):
                 self._load_full_checkpoint(cp)
                 return not is_after_first_update
 
-            #Note: Update even if update_vf == False because of passive progression check
             last_epoch_value_loss = epoch_value_loss
 
             if not is_first_epoch:
@@ -441,7 +440,7 @@ class PPO(PolicyUpdater):
                 self.optimizer.step()
 
 
-        # find factor such that applying applying it 5 time reverts one decay step
+        # find factor such that applying applying it decay_revert_steps times reverts one decay step
         decay_revert_steps = 3
         factor = (1.0 / self.lr_decay)**(1/decay_revert_steps)
 
