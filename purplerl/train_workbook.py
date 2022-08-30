@@ -52,15 +52,9 @@ def run(dev_mode = False):
             "update_epochs" : 10,
             "discount": 0.95,
             "adv_lambda": 0.95,
-            "clip_ratio": 0.2
-        },
-        "phase2": {
-            "policy_lr": 1e-4,
-            "vf_lr": 2.5e-4,
-            "update_epochs" : 10,
-            "discount": 0.99,
-            "adv_lambda": 0.95,
-            "clip_ratio": 0.2
+            "clip_ratio": 0.2,
+            "target_kl": 0.03,
+            "lr_decay": 0.90,
         }
     }
     active_phase = "phase1"
@@ -83,9 +77,10 @@ def create_trainer(
     phase = "phase1",
     clip_ratio: float = 0.2,
     target_kl: float = 0.01,
+    lr_decay: float = 0.95,
 ):
     num_envs = 64
-    update_batch_size = 1216 // num_envs
+    update_batch_size = 1216 // num_envs  # 1856
     buffer_size = update_batch_size * 2
 
     epochs = 2000
@@ -125,6 +120,7 @@ def create_trainer(
         lam = adv_lambda,
         clip_ratio = clip_ratio,
         target_kl = target_kl,
+        lr_decay = lr_decay
     )
     wandb.watch((policy, policy_updater.value_net_tail), log='all', log_freq=20)
 
