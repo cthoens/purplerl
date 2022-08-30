@@ -373,7 +373,7 @@ class PPO(PolicyUpdater):
                 else:
                     batch_policy_loss, kl, clip_factor = self._policy_loss(logp_old, encoded_obs, act, adv)
 
-                kl_total += torch.abs(kl).sum().detach()
+                kl_total += kl.sum().detach()
                 kl_count += np.prod(kl.shape).item()
                 policy_loss_total += batch_policy_loss.sum().detach()
                 policy_loss_count += np.prod(batch_policy_loss.shape).item()
