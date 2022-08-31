@@ -70,8 +70,8 @@ def run(dev_mode = False):
             "update_epochs" : 10,
             "discount": 0.95,
             "adv_lambda": 0.95,
-            "clip_ratio": 0.2,
-            "target_kl": 0.02,
+            "clip_ratio": 0.15,
+            "target_kl": 0.03,
             "target_vf_delta": 1.0,
             "lr_decay": 0.90,
 
