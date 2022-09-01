@@ -209,10 +209,12 @@ SHEET_OBS_SPACE = None
 POWER_OBS_SPACE = None
 OBSERVATION_SPACE = None
 
-#lesson_paths = ["l00", "l01", "l02", "l10", "l20", "l30"]
-#lesson_lengths = [8, 8, 8, 10, 10, 10]
-LESSON_PATHS = ["l00"]
-LESSON_LENGTHS = [8]
+#LESSON_PATHS = ["l00", "l01", "l02", "l10", "l20", "l30"]
+#LESSON_LENGTHS = [8, 8, 8, 10, 10, 10]
+#LESSON_PATHS = ["tune"]
+#LESSON_LENGTHS = [8]
+LESSON_PATHS = ["l00-I", "l01-C", "l02-V", "l03-T", "l04-X"]
+LESSON_LENGTHS = [8, 8, 8, 8, 8]
 SHEETS = None
 TEMPLATES = None
 

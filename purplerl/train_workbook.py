@@ -50,24 +50,7 @@ def run(dev_mode = False):
             "vf_only_update": False,
             "policy_lr": 2e-5,
             "vf_lr": 2e-4,
-            "update_epochs" : 10,
-            "discount": 0.95,
-            "adv_lambda": 0.95,
-            "clip_ratio": 0.2,
-            "target_kl": 0.02,
-            "target_vf_delta": 1.0,
-            "lr_decay": 0.90,
-
-            "num_envs": 64,
-            "update_batch_size": 19, # 29
-            "update_batch_count": 2,
-            "epochs": 30
-        },
-        "phase2": {
-            "vf_only_update": False,
-            "policy_lr": 2e-5,
-            "vf_lr": 2e-4,
-            "update_epochs" : 10,
+            "update_epochs" : 8,
             "discount": 0.95,
             "adv_lambda": 0.95,
             "clip_ratio": 0.15,
@@ -81,7 +64,7 @@ def run(dev_mode = False):
             "epochs": 2000
         }
     }
-    active_phase = "phase2"
+    active_phase = "phase1"
     config = phase_config[active_phase]
     config["phase"] = active_phase
     wandb_mode = "online" if not dev_mode else "disabled"

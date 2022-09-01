@@ -455,6 +455,13 @@ class PPO(PolicyUpdater):
                 update_balance_backup = self.update_balance
                 self._load_full_checkpoint(cp)
                 self.update_balance = update_balance_backup
+
+                if not is_after_first_update:
+                    self.lr_factor *= self.lr_decay
+                    print(f"====> {self.lr_factor:.6f}")
+                    for group in self.optimizer.param_groups:
+                        group['lr'] = group['lr'] * self.lr_decay
+
                 return not is_after_first_update
 
             last_epoch_value_loss = epoch_value_loss
