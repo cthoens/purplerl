@@ -219,6 +219,7 @@ class GymEnvManager(EnvManager):
               - done (Tensor of bool): true if the environments episode has ended and the environment was reset
 
         """
+        act = act.cpu().numpy()
         interaction =  [env.step(act.reshape(self.action_space.shape)) for env, act in zip(self.envs, act)]
         obs =  np.array([next_obs for next_obs, _, _, _ in interaction], dtype=np.float32)
         rew =  np.array([rew for _, rew, _, _ in interaction], dtype=np.float32)

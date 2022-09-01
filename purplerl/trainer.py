@@ -123,7 +123,7 @@ class Trainer:
 
         eval_start_time = time.time()
         if self.eval_func is not None:
-            plot = self.eval_func(self.epoch, self.policy_updater)
+            plot = self.eval_func(self.epoch, self.lesson, self.policy_updater)
             if plot:
                 wandb.log({"chart": plot})
                 plot.close()
@@ -144,7 +144,7 @@ class Trainer:
                 act_dist = self.policy.action_dist(encoded_obs = encoded_obs)
                 act = act_dist.sample()
                 action_mean_entropy[step, :] = act_dist.entropy().mean(-1)
-                next_obs, rew, done, success = self.env_manager.step(act.cpu().numpy())
+                next_obs, rew, done, success = self.env_manager.step(act)
                 next_obs = torch.as_tensor(next_obs, **self.cfg.tensor_args)
 
                 self.experience.step(obs, act, rew)

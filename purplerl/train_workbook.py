@@ -14,7 +14,6 @@ from purplerl.environment import GymEnvManager
 from purplerl.policy import ContinuousPolicy, PPO
 from purplerl.config import GpuConfig
 from purplerl.eval_workbook import do_eval
-from purplerl.resnet import resnet18
 from purplerl.vision_models import half_unet_v1
 import purplerl.workbook_env as env
 
@@ -47,6 +46,22 @@ class WorkbenchObsEncoder(torch.nn.Module):
 def run(dev_mode = False):
     phase_config = {
         "phase1": {
+            "vf_only_update": False,
+            "policy_lr": 2e-5,
+            "vf_lr": 2e-4,
+            "update_epochs" : 8,
+            "discount": 0.95,
+            "adv_lambda": 0.95,
+            "clip_ratio": 0.15,
+            "target_kl": 0.03,
+            "target_vf_delta": 1.0,
+            "lr_decay": 0.90,
+
+            "num_envs": 64,
+            "update_batch_size": 19, # 29
+            "update_batch_count": 2,
+            "epochs": 2000
+        }, "phase2": {
             "vf_only_update": False,
             "policy_lr": 2e-5,
             "vf_lr": 2e-4,
@@ -147,7 +162,7 @@ def create_trainer(
         epochs = epochs,
         save_freq = save_freq,
         output_dir= out_dir,
-        eval_func = lambda epoch, policy_updater: do_eval(out_dir, epoch, policy_updater)
+        eval_func = lambda epoch, lesson, policy_updater: do_eval(out_dir, epoch, lesson, policy_updater)
     )
 
     checkpoint_path = os.path.join(f"results/{project_name}", f"{phase}-resume.pt")
