@@ -116,7 +116,9 @@ class WorkbookEnv(gym.Env):
 
         min_coord = np.array([  0.0,   0.0], dtype=np.float32)
         max_coord = np.array([SHEET_OBS_SPACE.shape[1]-1.0, SHEET_OBS_SPACE.shape[2]-1.0], dtype=np.float32)
-        self.cursor_pos = np.clip(self.cursor_pos + self.cursor_vel, min_coord, max_coord)
+        next_cursor_pos = np.clip(self.cursor_pos + self.cursor_vel, min_coord, max_coord)
+        if abs(self._get_pixel_at(next_cursor_pos) - (-0.56078434)) > 0.01:
+            self.cursor_pos = next_cursor_pos
         obs = self._get_obs()
         info = {}
         self.energy_left -= max(action_speed, 1.0)
@@ -161,6 +163,10 @@ class WorkbookEnv(gym.Env):
         pos = self._get_cursor_pos_int()
         return self.sheet[pos[0], pos[1]]
 
+    def _get_pixel_at(self, cursor_pos):
+        pos = cursor_pos.astype(np.int32)
+        return self.sheet[pos[0], pos[1]]
+
 
     def render(self, mode="human"):
         try:
@@ -180,7 +186,7 @@ class WorkbookEnv(gym.Env):
         if self.clock is None:
             self.clock = pygame.time.Clock()
 
-        image = self._get_obs()[:-1].reshape(self.SHEET_OBS_SPACE.shape)
+        image = self._get_obs()[:-3].reshape(SHEET_OBS_SPACE.shape)
         image += 1.0
         image *= 127.5
         surf = pygame.surfarray.make_surface(image.astype(np.uint8).squeeze().swapaxes(0, 1))
@@ -211,21 +217,21 @@ OBSERVATION_SPACE = None
 
 #LESSON_PATHS = ["l00", "l01", "l02", "l10", "l20", "l30"]
 #LESSON_LENGTHS = [8, 8, 8, 10, 10, 10]
-#LESSON_PATHS = ["tune"]
-#LESSON_LENGTHS = [8]
-LESSON_PATHS = [
-    "l00-I", "l01-C", "l02-V", "l03-T", "l04-Y", "l05-Z", "l06-X",
-    "l00-I", "l01-C", "l02-V", "l03-T", "l04-Y", "l05-Z", "l06-X",
-    "l00-I", "l01-C", "l02-V", "l03-T", "l04-Y", "l05-Z", "l06-X",
+LESSON_PATHS = ["l10-I"]
+LESSON_LENGTHS = [8]
+#LESSON_PATHS = [
+#    "l00-I", "l01-C", "l02-V", "l03-T", "l04-Y", "l05-Z", "l06-X",
+#    "l00-I", "l01-C", "l02-V", "l03-T", "l04-Y", "l05-Z", "l06-X",
+#    "l00-I", "l01-C", "l02-V", "l03-T", "l04-Y", "l05-Z", "l06-X",
 
-    "l00-I", "l01-C", "l02-V", "l03-T", "l04-Y", "l05-Z", "l06-X",
-    "l00-I", "l01-C", "l02-V", "l03-T", "l04-Y", "l05-Z", "l06-X",
-    "l00-I", "l01-C", "l02-V", "l03-T", "l04-Y", "l05-Z", "l06-X",
+#    "l00-I", "l01-C", "l02-V", "l03-T", "l04-Y", "l05-Z", "l06-X",
+#    "l00-I", "l01-C", "l02-V", "l03-T", "l04-Y", "l05-Z", "l06-X",
+#    "l00-I", "l01-C", "l02-V", "l03-T", "l04-Y", "l05-Z", "l06-X",
 
-    "l00-I", "l01-C", "l02-V", "l03-T", "l04-Y", "l05-Z", "l06-X",
-    "l00-I", "l01-C", "l02-V", "l03-T", "l04-Y", "l05-Z", "l06-X",
-    "l00-I", "l01-C", "l02-V", "l03-T", "l04-Y", "l05-Z", "l06-X",
-]
+#    "l00-I", "l01-C", "l02-V", "l03-T", "l04-Y", "l05-Z", "l06-X",
+#    "l00-I", "l01-C", "l02-V", "l03-T", "l04-Y", "l05-Z", "l06-X",
+#    "l00-I", "l01-C", "l02-V", "l03-T", "l04-Y", "l05-Z", "l06-X",
+#]
 
 LESSON_LENGTHS = [
     8, 8, 8, 8, 8, 8, 8,
@@ -277,7 +283,7 @@ def test():
     import time
 
     env = WorkbookEnv()
-    env.set_lesson(1)
+    env.set_lesson(0)
     env.reset()
     for i in range(1000):
         time.sleep(0.2)
