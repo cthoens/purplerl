@@ -26,7 +26,7 @@ class WorkbookEnv(gym.Env):
     MAX_ENERGY = 60
     SPAWN_DICT = {}
 
-    def __init__(self, sheet_path="sheets") -> None:
+    def __init__(self, sheet_path="sheets-64") -> None:
         init(sheet_path)
         self.sheet_path = sheet_path
         self.screen = None
@@ -213,8 +213,33 @@ OBSERVATION_SPACE = None
 #LESSON_LENGTHS = [8, 8, 8, 10, 10, 10]
 #LESSON_PATHS = ["tune"]
 #LESSON_LENGTHS = [8]
-LESSON_PATHS = ["l00-I", "l01-C", "l02-V", "l03-T", "l04-X"]
-LESSON_LENGTHS = [8, 8, 8, 8, 8]
+LESSON_PATHS = [
+    "l00-I", "l01-C", "l02-V", "l03-T", "l04-Y", "l05-Z", "l06-X",
+    "l00-I", "l01-C", "l02-V", "l03-T", "l04-Y", "l05-Z", "l06-X",
+    "l00-I", "l01-C", "l02-V", "l03-T", "l04-Y", "l05-Z", "l06-X",
+
+    "l00-I", "l01-C", "l02-V", "l03-T", "l04-Y", "l05-Z", "l06-X",
+    "l00-I", "l01-C", "l02-V", "l03-T", "l04-Y", "l05-Z", "l06-X",
+    "l00-I", "l01-C", "l02-V", "l03-T", "l04-Y", "l05-Z", "l06-X",
+
+    "l00-I", "l01-C", "l02-V", "l03-T", "l04-Y", "l05-Z", "l06-X",
+    "l00-I", "l01-C", "l02-V", "l03-T", "l04-Y", "l05-Z", "l06-X",
+    "l00-I", "l01-C", "l02-V", "l03-T", "l04-Y", "l05-Z", "l06-X",
+]
+
+LESSON_LENGTHS = [
+    8, 8, 8, 8, 8, 8, 8,
+    8, 8, 8, 8, 8, 8, 8,
+    8, 8, 8, 8, 8, 8, 8,
+
+    10, 10, 10, 10, 10, 10, 10,
+    10, 10, 10, 10, 10, 10, 10,
+    10, 10, 10, 10, 10, 10, 10,
+
+    12, 12, 12, 12, 12, 12, 12,
+    12, 12, 12, 12, 12, 12, 12,
+    12, 12, 12, 12, 12, 12, 12,
+]
 SHEETS = None
 TEMPLATES = None
 

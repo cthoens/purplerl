@@ -60,8 +60,43 @@ def run(dev_mode = False):
             "num_envs": 64,
             "update_batch_size": 19, # 29
             "update_batch_count": 2,
+            "epochs": 4000
+        },
+        "phase2": {
+            "vf_only_update": False,
+            "policy_lr": 2e-5,
+            "vf_lr": 2e-4,
+            "update_epochs" : 8,
+            "discount": 0.95,
+            "adv_lambda": 0.95,
+            "clip_ratio": 0.15,
+            "target_kl": 0.03,
+            "target_vf_delta": 1.0,
+            "lr_decay": 0.90,
+
+            "num_envs": 64,
+            "update_batch_size": 19, # 29
+            "update_batch_count": 2,
             "epochs": 2000
-        }, "phase2": {
+        },
+        "phase3": {
+            "vf_only_update": False,
+            "policy_lr": 2e-5,
+            "vf_lr": 2e-4,
+            "update_epochs" : 8,
+            "discount": 0.95,
+            "adv_lambda": 0.95,
+            "clip_ratio": 0.15,
+            "target_kl": 0.03,
+            "target_vf_delta": 1.0,
+            "lr_decay": 0.90,
+
+            "num_envs": 64,
+            "update_batch_size": 19, # 29
+            "update_batch_count": 2,
+            "epochs": 2000
+        },
+        "phase4": {
             "vf_only_update": False,
             "policy_lr": 2e-5,
             "vf_lr": 2e-4,
