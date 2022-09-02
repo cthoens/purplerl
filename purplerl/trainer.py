@@ -20,6 +20,7 @@ class Trainer:
     POLICY = "Policy"
     TRAINER = "Trainer"
     ENTROPY = "Entropy"
+    LESSON_TIMEOUT = "Lesson Timeout"
     LESSON = "lesson"
     LESSON_START_EPOCH = "lesson_start_epoch"
     EPOCH = "epoch"
@@ -79,7 +80,9 @@ class Trainer:
                  max_disc_reward = epoch_disc_reward
                  max_disc_reward_epoch = self.epoch
 
-            if self.epoch - max_disc_reward_epoch > 100:
+            lesson_timeout = self.epoch - max_disc_reward_epoch
+            self.own_stats[self.LESSON_TIMEOUT] = lesson_timeout
+            if lesson_timeout > 100:
                  self.lesson += 1
                  self.lesson_start_epoch = self.epoch + 1
                  max_disc_reward = float('-inf')

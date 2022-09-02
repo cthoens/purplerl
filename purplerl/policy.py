@@ -217,8 +217,7 @@ class PolicyUpdater:
 
 class PPO(PolicyUpdater):
     KL = "KL"
-    POLICY_EPOCHS = "Policy Epochs"
-    VF_EPOCHS = "VF Epochs"
+    BACKTRACK_COUNT = "Backtrack Count"
     UPDATE_BALANCE = "Update Balance"
     CLIP_FACTOR = "Clip Factor"
     VALUE_LOSS = "VF Loss"
@@ -295,31 +294,49 @@ class PPO(PolicyUpdater):
 
 
     def update(self):
-        for _ in range(self.update_epochs // 2):
-            if self._do_update():
-                return
-
-            # Note: Must be done after restoring the checkpoint
-            self.lr_factor *= self.lr_decay
-            print(f"====> {self.lr_factor:.6f}")
-            for group in self.optimizer.param_groups:
-                group['lr'] = group['lr'] * self.lr_decay
-
-            # reset the optimizer to make sure momentum does not keep driving
-            # the parameters into the wrong direction
-            vf_lr = self.initial_vf_lr * self.lr_factor
-            policy_lr = self.initial_policy_lr * self.lr_factor
-            self.optimizer = Adam([
-                {'params': self.policy.obs_encoder.parameters(), 'lr': max(vf_lr, policy_lr)},
-                {'params': self.policy.action_dist_net_tail.parameters(), 'lr': policy_lr},
-                {'params': self.value_net_tail.parameters(), 'lr': vf_lr}
-            ])
-
-    def _do_update(self):
         for key in self.stats:
             self.stats[key] = None
-        self.stats[self.POLICY_EPOCHS] = 0
-        self.stats[self.VF_EPOCHS] = 0
+        self.stats[self.BACKTRACK_COUNT] = 0
+
+        for _ in range(self.update_epochs):
+            cp = self._full_checkpoint()
+            update_successful = self._do_update()
+            if update_successful:
+                # find factor such that applying applying it decay_revert_steps times reverts one decay step
+                decay_revert_steps = 6
+                factor = (1.0 / self.lr_decay)**(1/decay_revert_steps)
+
+                self.lr_factor *= factor
+                print(f"====> {self.lr_factor:.6f}")
+                for group in self.optimizer.param_groups:
+                    group['lr'] = group['lr'] * factor
+
+                return
+
+            else:
+                self.stats[self.BACKTRACK_COUNT] += 1
+                # Keep update balance updates from getting reverted by the rollback
+                update_balance_backup = self.update_balance
+                self._load_full_checkpoint(cp)
+                self.update_balance = update_balance_backup
+
+                # Note: Must be done after restoring the checkpoint
+                self.lr_factor *= self.lr_decay
+                print(f"====> {self.lr_factor:.6f}")
+                for group in self.optimizer.param_groups:
+                    group['lr'] = group['lr'] * self.lr_decay
+
+        # reset the optimizer to make sure momentum does not keep driving
+        # the parameters into the wrong direction
+        vf_lr = self.initial_vf_lr * self.lr_factor
+        policy_lr = self.initial_policy_lr * self.lr_factor
+        self.optimizer = Adam([
+            {'params': self.policy.obs_encoder.parameters(), 'lr': max(vf_lr, policy_lr)},
+            {'params': self.policy.action_dist_net_tail.parameters(), 'lr': policy_lr},
+            {'params': self.value_net_tail.parameters(), 'lr': vf_lr}
+        ])
+
+    def _do_update(self):
         self.stats[self.BACKTRACK_POLICY] = 0
         self.stats[self.BACKTRACK_VF] = 0
         self.stats[self.LR_FACTOR] = self.lr_factor
@@ -333,10 +350,8 @@ class PPO(PolicyUpdater):
         #last_epoch_kl = 0.0
         value_loss_old = float("-inf")
 
-        cp = None
         for update_epoch in range(self.update_epochs+1):
             is_first_epoch = update_epoch == 0
-            is_after_first_update = update_epoch == 1
             is_validate_epoch = update_epoch == self.update_epochs
             batch_start = 0
             totals[...] = 0.0
@@ -451,18 +466,7 @@ class PPO(PolicyUpdater):
 
             if backtrack:
                 assert(not is_first_epoch)
-                # Keep update balance updates from getting reverted by the rollback
-                update_balance_backup = self.update_balance
-                self._load_full_checkpoint(cp)
-                self.update_balance = update_balance_backup
-
-                if not is_after_first_update:
-                    self.lr_factor *= self.lr_decay
-                    print(f"====> {self.lr_factor:.6f}")
-                    for group in self.optimizer.param_groups:
-                        group['lr'] = group['lr'] * self.lr_decay
-
-                return not is_after_first_update
+                return False
 
             last_epoch_value_loss = epoch_value_loss
             #last_epoch_kl = epoch_kl
@@ -473,28 +477,17 @@ class PPO(PolicyUpdater):
                 self.stats[self.VF_DELTA] = value_loss_old - epoch_value_loss
 
             if not is_first_epoch:
-                self.stats[self.POLICY_EPOCHS] += 1
                 self.stats[self.KL] = kl_total.item() / kl_count.item()
                 if clip_factor_count != 0:
                     self.stats[self.POLICY_LOSS] = policy_loss_total.item() / policy_loss_count.item()
                     self.stats[self.CLIP_FACTOR] = clip_factor_total.item() / clip_factor_count.item()
             if not is_first_epoch:
-                self.stats[self.VF_EPOCHS] += 1
                 self.stats[self.VALUE_LOSS] = epoch_value_loss
 
+            # The last epoch is only used to check that no rollback is needed after the
+            # last update and get the final stats
             if not is_validate_epoch:
-                cp = self._full_checkpoint()
                 self.optimizer.step()
-
-
-        # find factor such that applying applying it decay_revert_steps times reverts one decay step
-        decay_revert_steps = 3
-        factor = (1.0 / self.lr_decay)**(1/decay_revert_steps)
-
-        self.lr_factor *= factor
-        print(f"====> {self.lr_factor:.6f}")
-        for group in self.optimizer.param_groups:
-            group['lr'] = group['lr'] * factor
 
         return True
 
