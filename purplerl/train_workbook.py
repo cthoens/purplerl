@@ -14,7 +14,6 @@ from purplerl.environment import GymEnvManager
 from purplerl.policy import ContinuousPolicy, PPO
 from purplerl.config import GpuConfig
 from purplerl.eval_workbook import do_eval
-from purplerl.resnet import resnet18
 from purplerl.vision_models import half_unet_v1
 import purplerl.workbook_env as env
 
@@ -47,14 +46,72 @@ class WorkbenchObsEncoder(torch.nn.Module):
 def run(dev_mode = False):
     phase_config = {
         "phase1": {
+            "vf_only_update": False,
             "policy_lr": 2e-5,
             "vf_lr": 2e-4,
-            "update_epochs" : 10,
+            "update_epochs" : 8,
             "discount": 0.95,
             "adv_lambda": 0.95,
-            "clip_ratio": 0.2,
+            "clip_ratio": 0.15,
             "target_kl": 0.03,
+            "target_vf_delta": 1.0,
             "lr_decay": 0.90,
+
+            "num_envs": 64,
+            "update_batch_size": 19, # 29
+            "update_batch_count": 2,
+            "epochs": 4000
+        },
+        "phase2": {
+            "vf_only_update": False,
+            "policy_lr": 2e-5,
+            "vf_lr": 2e-4,
+            "update_epochs" : 8,
+            "discount": 0.95,
+            "adv_lambda": 0.95,
+            "clip_ratio": 0.15,
+            "target_kl": 0.03,
+            "target_vf_delta": 1.0,
+            "lr_decay": 0.90,
+
+            "num_envs": 64,
+            "update_batch_size": 19, # 29
+            "update_batch_count": 2,
+            "epochs": 2000
+        },
+        "phase3": {
+            "vf_only_update": False,
+            "policy_lr": 2e-5,
+            "vf_lr": 2e-4,
+            "update_epochs" : 8,
+            "discount": 0.95,
+            "adv_lambda": 0.95,
+            "clip_ratio": 0.15,
+            "target_kl": 0.03,
+            "target_vf_delta": 1.0,
+            "lr_decay": 0.90,
+
+            "num_envs": 64,
+            "update_batch_size": 19, # 29
+            "update_batch_count": 2,
+            "epochs": 2000
+        },
+        "phase4": {
+            "vf_only_update": False,
+            "policy_lr": 2e-5,
+            "vf_lr": 2e-4,
+            "update_epochs" : 8,
+            "discount": 0.95,
+            "adv_lambda": 0.95,
+            "clip_ratio": 0.15,
+            "target_kl": 0.03,
+            "target_vf_delta": 1.0,
+            "lr_decay": 0.90,
+
+            "num_envs": 64,
+            "update_batch_size": 19, # 29
+            "update_batch_count": 2,
+            "epochs": 2000
         }
     }
     active_phase = "phase1"
@@ -76,15 +133,19 @@ def create_trainer(
     adv_lambda: float = 0.95,
     phase = "phase1",
     clip_ratio: float = 0.2,
-    target_kl: float = 0.01,
+    target_kl: float = 0.15,
+    target_vf_delta: float = 1.0,
     lr_decay: float = 0.95,
-):
-    num_envs = 64
-    update_batch_size = 1216 // num_envs  # 1856
-    buffer_size = update_batch_size * 2
 
-    epochs = 2000
-    save_freq = 500
+    vf_only_update: bool = False,
+    num_envs: int = 64,
+    update_batch_size: int = 29,
+    update_batch_count: int = 2,
+    epochs: int = 3000
+):
+    buffer_size = update_batch_size * update_batch_count
+
+    save_freq = 100
 
     env_manager= GymEnvManager(env.WorkbookEnv, num_envs=num_envs)
 
@@ -113,6 +174,7 @@ def create_trainer(
         policy = policy,
         experience = experience,
         hidden_sizes = [128, 128],
+        vf_only_update= vf_only_update,
         policy_lr = policy_lr,
         vf_lr = vf_lr,
         update_epochs = update_epochs,
@@ -120,6 +182,7 @@ def create_trainer(
         lam = adv_lambda,
         clip_ratio = clip_ratio,
         target_kl = target_kl,
+        target_vf_delta = target_vf_delta,
         lr_decay = lr_decay
     )
     wandb.watch((policy, policy_updater.value_net_tail), log='all', log_freq=20)
@@ -134,7 +197,7 @@ def create_trainer(
         epochs = epochs,
         save_freq = save_freq,
         output_dir= out_dir,
-        eval_func = lambda epoch, policy_updater: do_eval(out_dir, epoch, policy_updater)
+        eval_func = lambda epoch, lesson, policy_updater: do_eval(out_dir, epoch, lesson, policy_updater)
     )
 
     checkpoint_path = os.path.join(f"results/{project_name}", f"{phase}-resume.pt")

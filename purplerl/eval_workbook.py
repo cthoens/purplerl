@@ -16,11 +16,10 @@ from purplerl.policy import PolicyUpdater
 
 color_map = plt.get_cmap('RdYlGn')
 
-def do_eval(out_dir, epoch, policy_updater: PolicyUpdater):
+def do_eval(out_dir, epoch, lesson, policy_updater: PolicyUpdater):
     if epoch % 50 != 0:
         return
 
-    lesson = 0
     env = WorkbookEnv()
     env.set_lesson(lesson)
 

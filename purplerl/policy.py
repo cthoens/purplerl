@@ -219,11 +219,17 @@ class PPO(PolicyUpdater):
     KL = "KL"
     POLICY_EPOCHS = "Policy Epochs"
     VF_EPOCHS = "VF Epochs"
+    UPDATE_BALANCE = "Update Balance"
     CLIP_FACTOR = "Clip Factor"
     VALUE_LOSS = "VF Loss"
     LR_FACTOR = "LR Factor"
     BACKTRACK_POLICY = "Backtrack Policy"
     BACKTRACK_VF = "Backtrack VF"
+    VF_DELTA = "VF Delta"
+
+    MIN_UPDATE_BALANCE = 0.0
+    MAX_UPDATE_BALANCE = 1.0
+    UPDATE_BALANCE_STEP = 0.01
 
     def __init__(self,
         cfg: dict,
@@ -236,8 +242,10 @@ class PPO(PolicyUpdater):
         update_epochs: int,
         lam: float = 0.95,
         clip_ratio: float = 0.2,
-        target_kl: float = 0.01,
+        target_kl: float = 0.15,
+        target_vf_delta: float = 0.1,
         lr_decay: float = 0.95,
+        vf_only_update: bool = False
     ) -> None:
         super().__init__(cfg, policy, experience)
 
@@ -247,9 +255,12 @@ class PPO(PolicyUpdater):
         self.update_batch_size = update_batch_size
         self.clip_ratio = clip_ratio
         self.target_kl = target_kl
+        self.target_vf_delta = target_vf_delta
         self.lam = lam
         self.lr_factor = 1.0
         self.lr_decay = lr_decay
+        self.update_balance = (self.MAX_UPDATE_BALANCE - self.MIN_UPDATE_BALANCE) / 2.0
+        self.vf_only_update = vf_only_update
 
         self.value_net_tail = mlp(list(policy.obs_encoder.shape) + hidden_sizes + [1]).to(cfg.device)
 
@@ -312,12 +323,15 @@ class PPO(PolicyUpdater):
         self.stats[self.BACKTRACK_POLICY] = 0
         self.stats[self.BACKTRACK_VF] = 0
         self.stats[self.LR_FACTOR] = self.lr_factor
+        self.stats[self.UPDATE_BALANCE] = self.update_balance
 
         counts = np.zeros(4)
         totals = torch.zeros(4, requires_grad=False, **self.cfg.tensor_args)
         policy_loss_total, value_loss_total, kl_total, clip_factor_total = totals[0:1], totals[1:2], totals[2:3], totals[3:4]
         policy_loss_count, value_loss_count, kl_count, clip_factor_count = counts[0:1], counts[1:2], counts[2:3], counts[3:4]
         last_epoch_value_loss = float("inf")
+        #last_epoch_kl = 0.0
+        value_loss_old = float("-inf")
 
         cp = None
         for update_epoch in range(self.update_epochs+1):
@@ -354,7 +368,10 @@ class PPO(PolicyUpdater):
                 # -------------
                 # Note: Calculdate even if update_policy == False to check for passive_policy_progression (see below)
 
-                batch_policy_loss, kl, clip_factor = self._policy_loss(logp_old, encoded_obs, act, adv)
+                if self.vf_only_update:
+                    batch_policy_loss, kl, clip_factor = self._stationary_policy_loss(logp_old, encoded_obs, act, adv)
+                else:
+                    batch_policy_loss, kl, clip_factor = self._policy_loss(logp_old, encoded_obs, act, adv)
 
                 kl_total += kl.sum().detach()
                 kl_count += np.prod(kl.shape).item()
@@ -402,28 +419,58 @@ class PPO(PolicyUpdater):
 
             # whether to roll back policy and vf to state before last update
             backtrack = False
+
+            policy_done = False
             epoch_kl = abs(kl_total.item() / kl_count).item()
-            if  epoch_kl > self.target_kl:
+            # kl_decreased = (epoch_kl < last_epoch_kl and not self.vf_only_update) or
+            kl_limit_reached = epoch_kl > self.target_kl
+            if kl_limit_reached:
                 print("->", end="")
                 self.stats[self.BACKTRACK_POLICY] = 1.0
                 backtrack = True
+                policy_done = True
             else:
                 print("  ", end="")
             print(f"{epoch_kl:.6f} ", end="")
 
+            vf_done = False
             epoch_value_loss = value_loss_total.item() / value_loss_count.item()
-            if epoch_value_loss > last_epoch_value_loss:
+            value_loss_increased = epoch_value_loss > last_epoch_value_loss
+            value_update_limit_reached = value_loss_old - epoch_value_loss > self.target_vf_delta
+            if value_loss_increased or value_update_limit_reached:
                 print("->", end="")
                 self.stats[self.BACKTRACK_VF] = 1.0
                 backtrack = True
+                vf_done = True
             print(f"{epoch_value_loss:.6f}")
+
+            if policy_done and not vf_done:
+                self.update_balance = min(self.update_balance + self.UPDATE_BALANCE_STEP, self.MAX_UPDATE_BALANCE)
+            if vf_done and not policy_done:
+                self.update_balance = max(self.update_balance - self.UPDATE_BALANCE_STEP, self.MIN_UPDATE_BALANCE)
 
             if backtrack:
                 assert(not is_first_epoch)
+                # Keep update balance updates from getting reverted by the rollback
+                update_balance_backup = self.update_balance
                 self._load_full_checkpoint(cp)
+                self.update_balance = update_balance_backup
+
+                if not is_after_first_update:
+                    self.lr_factor *= self.lr_decay
+                    print(f"====> {self.lr_factor:.6f}")
+                    for group in self.optimizer.param_groups:
+                        group['lr'] = group['lr'] * self.lr_decay
+
                 return not is_after_first_update
 
             last_epoch_value_loss = epoch_value_loss
+            #last_epoch_kl = epoch_kl
+
+            if is_first_epoch:
+                value_loss_old = epoch_value_loss
+            else:
+                self.stats[self.VF_DELTA] = value_loss_old - epoch_value_loss
 
             if not is_first_epoch:
                 self.stats[self.POLICY_EPOCHS] += 1
@@ -450,6 +497,19 @@ class PPO(PolicyUpdater):
             group['lr'] = group['lr'] * factor
 
         return True
+
+
+    def _stationary_policy_loss(self, logp_old, encoded_obs, act, adv) -> Tuple[torch.tensor, float, float, float]:
+        # Policy loss
+        action_dist = self.policy.action_dist(encoded_obs=encoded_obs)
+        logp = action_dist.log_prob(act).sum(-1)
+        loss = 10000.0 * torch.square(logp - logp_old)
+
+        # Stats
+        kl = logp_old - logp
+        clip_factor = torch.zeros(1)
+
+        return loss, kl, clip_factor
 
 
     def _policy_loss(self, logp_old, encoded_obs, act, adv) -> Tuple[torch.tensor, float, float, float]:
@@ -511,6 +571,7 @@ class PPO(PolicyUpdater):
             'initial_policy_lr': self.initial_policy_lr,
             'initial_vf_lr': self.initial_vf_lr,
             'lr_factor': self.lr_factor,
+            'update_balance': self.update_balance
         }
 
 
@@ -520,6 +581,7 @@ class PPO(PolicyUpdater):
         self.initial_policy_lr = checkpoint['initial_policy_lr']
         self.initial_vf_lr = checkpoint['initial_vf_lr']
         self.lr_factor = checkpoint['lr_factor']
+        self.update_balance = checkpoint['update_balance']
 
 
     def _full_checkpoint(self):

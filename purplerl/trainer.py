@@ -62,37 +62,37 @@ class Trainer:
 
 
     def run_training(self):
-        #max_disc_reward = float('-inf')
-        #max_disc_reward_epoch = 0
+        max_disc_reward = float('-inf')
+        max_disc_reward_epoch = 0
         for self.epoch in range(self.epochs):
             self.run_epoch()
             wandb.log(copy.deepcopy(self.all_stats), step=self.epoch)
             self.log_to_console()
 
 
-            # epoch_disc_reward = self.experience.mean_disc_reward()
-            # lesson_warmup_phase = self.epoch - self.lesson_start_epoch <= 10
-            # if lesson_warmup_phase:
-            #     max_disc_reward_epoch = self.epoch + 1
-            #     max_disc_reward = float('-inf')
-            # elif epoch_disc_reward > max_disc_reward:
-            #     max_disc_reward = epoch_disc_reward
-            #     max_disc_reward_epoch = self.epoch
+            epoch_disc_reward = self.experience.mean_disc_reward()
+            lesson_warmup_phase = self.epoch - self.lesson_start_epoch <= 30
+            if lesson_warmup_phase:
+                 max_disc_reward_epoch = self.epoch + 1
+                 max_disc_reward = float('-inf')
+            elif epoch_disc_reward > max_disc_reward:
+                 max_disc_reward = epoch_disc_reward
+                 max_disc_reward_epoch = self.epoch
 
-            # if self.epoch - max_disc_reward_epoch > 20:
-            #     self.lesson += 1
-            #     self.lesson_start_epoch = self.epoch + 1
-            #     max_disc_reward = float('-inf')
-            #     max_disc_reward_epoch = self.epoch + 1
-            #     self.own_stats[self.LESSON] = self.lesson
-            #     self.save_checkpoint(f"lesson {self.lesson}.pt")
+            if self.epoch - max_disc_reward_epoch > 100:
+                 self.lesson += 1
+                 self.lesson_start_epoch = self.epoch + 1
+                 max_disc_reward = float('-inf')
+                 max_disc_reward_epoch = self.epoch + 1
+                 self.own_stats[self.LESSON] = self.lesson
+                 self.save_checkpoint(f"lesson {self.lesson}.pt")
 
-            #     has_more_lessons = self.env_manager.set_lesson(self.lesson)
-            #     if has_more_lessons:
-            #         print(f"Starting lesson {self.lesson}")
-            #     else:
-            #         print(f"Training completed")
-            #         return
+                 has_more_lessons = self.env_manager.set_lesson(self.lesson)
+                 if has_more_lessons:
+                     print(f"******> Starting lesson {self.lesson}")
+                 else:
+                     print(f"Training completed")
+                     return
 
     def run_epoch(self):
         self.epoch += self.resume_epoch
@@ -123,7 +123,7 @@ class Trainer:
 
         eval_start_time = time.time()
         if self.eval_func is not None:
-            plot = self.eval_func(self.epoch, self.policy_updater)
+            plot = self.eval_func(self.epoch, self.lesson, self.policy_updater)
             if plot:
                 wandb.log({"chart": plot})
                 plot.close()
@@ -144,7 +144,7 @@ class Trainer:
                 act_dist = self.policy.action_dist(encoded_obs = encoded_obs)
                 act = act_dist.sample()
                 action_mean_entropy[step, :] = act_dist.entropy().mean(-1)
-                next_obs, rew, done, success = self.env_manager.step(act.cpu().numpy())
+                next_obs, rew, done, success = self.env_manager.step(act)
                 next_obs = torch.as_tensor(next_obs, **self.cfg.tensor_args)
 
                 self.experience.step(obs, act, rew)
