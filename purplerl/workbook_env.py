@@ -217,8 +217,8 @@ OBSERVATION_SPACE = None
 
 #LESSON_PATHS = ["l00", "l01", "l02", "l10", "l20", "l30"]
 #LESSON_LENGTHS = [8, 8, 8, 10, 10, 10]
-LESSON_PATHS = ["l10-I"]
-LESSON_LENGTHS = [8]
+LESSON_PATHS = ["l00-I", "l10-I", "l20-I"]
+LESSON_LENGTHS = [8, 8, 8]
 #LESSON_PATHS = [
 #    "l00-I", "l01-C", "l02-V", "l03-T", "l04-Y", "l05-Z", "l06-X",
 #    "l00-I", "l01-C", "l02-V", "l03-T", "l04-Y", "l05-Z", "l06-X",
@@ -233,19 +233,19 @@ LESSON_LENGTHS = [8]
 #    "l00-I", "l01-C", "l02-V", "l03-T", "l04-Y", "l05-Z", "l06-X",
 #]
 
-LESSON_LENGTHS = [
-    8, 8, 8, 8, 8, 8, 8,
-    8, 8, 8, 8, 8, 8, 8,
-    8, 8, 8, 8, 8, 8, 8,
+#LESSON_LENGTHS = [
+#    8, 8, 8, 8, 8, 8, 8,
+#    8, 8, 8, 8, 8, 8, 8,
+#    8, 8, 8, 8, 8, 8, 8,
 
-    10, 10, 10, 10, 10, 10, 10,
-    10, 10, 10, 10, 10, 10, 10,
-    10, 10, 10, 10, 10, 10, 10,
+#    10, 10, 10, 10, 10, 10, 10,
+#    10, 10, 10, 10, 10, 10, 10,
+#    10, 10, 10, 10, 10, 10, 10,
 
-    12, 12, 12, 12, 12, 12, 12,
-    12, 12, 12, 12, 12, 12, 12,
-    12, 12, 12, 12, 12, 12, 12,
-]
+#    12, 12, 12, 12, 12, 12, 12,
+#    12, 12, 12, 12, 12, 12, 12,
+#    12, 12, 12, 12, 12, 12, 12,
+#]
 SHEETS = None
 TEMPLATES = None
 
@@ -287,7 +287,8 @@ def test():
     env.reset()
     for i in range(1000):
         time.sleep(0.2)
-        _, _, done, _ = env.step(np.array([0.9, 0.1]))
+        _, rew, done, _ = env.step(np.array([0.9, 0.1]))
+        print(f"{rew:.4f} {done}")
         if done:
             env.reset()
         env.render()
