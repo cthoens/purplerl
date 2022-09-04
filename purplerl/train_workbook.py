@@ -60,7 +60,7 @@ def run(dev_mode = False):
             "num_envs": 64,
             "update_batch_size": 19, # 29
             "update_batch_count": 2,
-            "epochs": 4000
+            "epochs": 8000
         },
         "phase2": {
             "vf_only_update": False,
