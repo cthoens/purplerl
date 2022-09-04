@@ -47,8 +47,8 @@ def run(dev_mode = False):
     phase_config = {
         "phase1": {
             "vf_only_update": False,
-            "policy_lr": 2e-5,
             "vf_lr": 2e-4,
+            "policy_lr_factor": 0.1,
             "update_epochs" : 8,
             "discount": 0.95,
             "adv_lambda": 0.95,
@@ -64,8 +64,8 @@ def run(dev_mode = False):
         },
         "phase2": {
             "vf_only_update": False,
-            "policy_lr": 2e-5,
             "vf_lr": 2e-4,
+            "policy_lr_factor": 0.1,
             "update_epochs" : 8,
             "discount": 0.95,
             "adv_lambda": 0.95,
@@ -81,8 +81,8 @@ def run(dev_mode = False):
         },
         "phase3": {
             "vf_only_update": False,
-            "policy_lr": 2e-5,
             "vf_lr": 2e-4,
+            "policy_lr_factor": 0.1,
             "update_epochs" : 8,
             "discount": 0.95,
             "adv_lambda": 0.95,
@@ -96,10 +96,10 @@ def run(dev_mode = False):
             "update_batch_count": 2,
             "epochs": 2000
         },
-        "phase4": {
+        "lr-balance-test": {
             "vf_only_update": False,
-            "policy_lr": 2e-5,
             "vf_lr": 2e-4,
+            "policy_lr_factor": 0.1,
             "update_epochs" : 8,
             "discount": 0.95,
             "adv_lambda": 0.95,
@@ -111,10 +111,10 @@ def run(dev_mode = False):
             "num_envs": 64,
             "update_batch_size": 19, # 29
             "update_batch_count": 2,
-            "epochs": 2000
+            "epochs": 4000
         }
     }
-    active_phase = "phase1"
+    active_phase = "lr-balance-test"
     config = phase_config[active_phase]
     config["phase"] = active_phase
     wandb_mode = "online" if not dev_mode else "disabled"
@@ -126,8 +126,8 @@ def run(dev_mode = False):
 def create_trainer(
     project_name,
     exp_name,
-    policy_lr,
     vf_lr,
+    policy_lr_factor,
     update_epochs,
     discount: float = 0.95,
     adv_lambda: float = 0.95,
@@ -175,8 +175,8 @@ def create_trainer(
         experience = experience,
         hidden_sizes = [128, 128],
         vf_only_update= vf_only_update,
-        policy_lr = policy_lr,
         vf_lr = vf_lr,
+        policy_lr_factor = policy_lr_factor,
         update_epochs = update_epochs,
         update_batch_size=update_batch_size,
         lam = adv_lambda,

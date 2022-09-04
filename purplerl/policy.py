@@ -223,6 +223,7 @@ class PPO(PolicyUpdater):
     CLIP_FACTOR = "Clip Factor"
     VALUE_LOSS = "VF Loss"
     LR_FACTOR = "LR Factor"
+    POLICY_LR_FACTOR = "Policy LR Factor"
     BACKTRACK_POLICY = "Backtrack Policy"
     BACKTRACK_VF = "Backtrack VF"
     VF_DELTA = "VF Delta"
@@ -236,8 +237,8 @@ class PPO(PolicyUpdater):
         policy: ContinuousPolicy,
         experience: ExperienceBuffer,
         hidden_sizes: list,
-        policy_lr: float,
         vf_lr: float,
+        policy_lr_factor: float, #  = 0.1
         update_batch_size: int,
         update_epochs: int,
         lam: float = 0.95,
@@ -245,12 +246,13 @@ class PPO(PolicyUpdater):
         target_kl: float = 0.15,
         target_vf_delta: float = 0.1,
         lr_decay: float = 0.95,
+        lr_factor_decay: float = 0.92,
         vf_only_update: bool = False
     ) -> None:
         super().__init__(cfg, policy, experience)
 
-        self.initial_policy_lr = policy_lr
         self.initial_vf_lr = vf_lr
+        self.policy_lr_factor = policy_lr_factor
         self.update_epochs = update_epochs
         self.update_batch_size = update_batch_size
         self.clip_ratio = clip_ratio
@@ -259,16 +261,13 @@ class PPO(PolicyUpdater):
         self.lam = lam
         self.lr_factor = 1.0
         self.lr_decay = lr_decay
+        self.lr_factor_decay = lr_factor_decay
         self.update_balance = (self.MAX_UPDATE_BALANCE - self.MIN_UPDATE_BALANCE) / 2.0
         self.vf_only_update = vf_only_update
 
         self.value_net_tail = mlp(list(policy.obs_encoder.shape) + hidden_sizes + [1]).to(cfg.device)
 
-        self.optimizer = Adam([
-            {'params': self.policy.obs_encoder.parameters(), 'lr': max(self.initial_vf_lr, self.initial_policy_lr)},
-            {'params': self.policy.action_dist_net_tail.parameters(), 'lr': self.initial_policy_lr},
-            {'params': self.value_net_tail.parameters(), 'lr': self.initial_vf_lr}
-        ])
+        self._update_lr()
 
         self.logp_old = torch.zeros(experience.buffer_size, experience.num_envs, **experience.tensor_args)
         self.weight = torch.zeros(experience.buffer_size, experience.num_envs, **experience.tensor_args)
@@ -301,19 +300,20 @@ class PPO(PolicyUpdater):
 
             # Note: Must be done after restoring the checkpoint
             self.lr_factor *= self.lr_decay
-            print(f"====> {self.lr_factor:.6f}")
-            for group in self.optimizer.param_groups:
-                group['lr'] = group['lr'] * self.lr_decay
+            self._update_lr()
 
-            # reset the optimizer to make sure momentum does not keep driving
-            # the parameters into the wrong direction
-            vf_lr = self.initial_vf_lr * self.lr_factor
-            policy_lr = self.initial_policy_lr * self.lr_factor
-            self.optimizer = Adam([
-                {'params': self.policy.obs_encoder.parameters(), 'lr': max(vf_lr, policy_lr)},
-                {'params': self.policy.action_dist_net_tail.parameters(), 'lr': policy_lr},
-                {'params': self.value_net_tail.parameters(), 'lr': vf_lr}
-            ])
+
+    def _update_lr(self):
+        vf_lr = self.initial_vf_lr * self.lr_factor
+        policy_lr = vf_lr * self.policy_lr_factor
+
+        print(f"====> {self.lr_factor:.6f} / {self.policy_lr_factor:.6f} - {policy_lr:.1e} / {vf_lr:.1e} ")
+
+        self.optimizer = Adam([
+            {'params': self.policy.obs_encoder.parameters(), 'lr': max(policy_lr, vf_lr), 'name': "OBS_ENCODER_PARAMS"},
+            {'params': self.policy.action_dist_net_tail.parameters(), 'lr': policy_lr, 'name': "POLICY_PARAMS"},
+            {'params': self.value_net_tail.parameters(), 'lr': vf_lr, 'name': "VALUE_NET_PARAMS"}
+        ])
 
     def _do_update(self):
         for key in self.stats:
@@ -324,6 +324,7 @@ class PPO(PolicyUpdater):
         self.stats[self.BACKTRACK_VF] = 0
         self.stats[self.LR_FACTOR] = self.lr_factor
         self.stats[self.UPDATE_BALANCE] = self.update_balance
+        self.stats[self.POLICY_LR_FACTOR] = self.policy_lr_factor
 
         counts = np.zeros(4)
         totals = torch.zeros(4, requires_grad=False, **self.cfg.tensor_args)
@@ -446,14 +447,22 @@ class PPO(PolicyUpdater):
 
             if policy_done and not vf_done:
                 self.update_balance = min(self.update_balance + self.UPDATE_BALANCE_STEP, self.MAX_UPDATE_BALANCE)
+                self.policy_lr_factor = max(self.policy_lr_factor * self.lr_factor_decay, 0.1)
+                if not is_after_first_update:
+                    self._update_lr()
             if vf_done and not policy_done:
+                self.policy_lr_factor = min(self.policy_lr_factor * (1.0 / self.lr_factor_decay), 10)
+                if not is_after_first_update:
+                    self._update_lr()
                 self.update_balance = max(self.update_balance - self.UPDATE_BALANCE_STEP, self.MIN_UPDATE_BALANCE)
 
             if backtrack:
                 assert(not is_first_epoch)
                 # Keep update balance updates from getting reverted by the rollback
+                policy_lr_factor_backup = self.policy_lr_factor
                 update_balance_backup = self.update_balance
                 self._load_full_checkpoint(cp)
+                self.policy_lr_factor = policy_lr_factor_backup
                 self.update_balance = update_balance_backup
 
                 if not is_after_first_update:
@@ -568,8 +577,8 @@ class PPO(PolicyUpdater):
         return {
             'value_net_state_dict': {k: v.cpu() for k, v in self.value_net_tail.state_dict().items()},
             'optimizer_state_dict': self.optimizer.state_dict(),
-            'initial_policy_lr': self.initial_policy_lr,
             'initial_vf_lr': self.initial_vf_lr,
+            'policy_lr_factor': self.policy_lr_factor,
             'lr_factor': self.lr_factor,
             'update_balance': self.update_balance
         }
@@ -578,8 +587,8 @@ class PPO(PolicyUpdater):
     def load_checkpoint(self, checkpoint):
         self.value_net_tail.load_state_dict(checkpoint['value_net_state_dict'])
         self.optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
-        self.initial_policy_lr = checkpoint['initial_policy_lr']
         self.initial_vf_lr = checkpoint['initial_vf_lr']
+        self.policy_lr_factor = checkpoint['policy_lr_factor']
         self.lr_factor = checkpoint['lr_factor']
         self.update_balance = checkpoint['update_balance']
 
