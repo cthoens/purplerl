@@ -1,5 +1,4 @@
 import os
-import gym
 
 import random
 import torch
@@ -49,11 +48,11 @@ def run(dev_mode = False):
             "vf_only_update": False,
             "policy_lr": 2e-5,
             "vf_lr": 2e-4,
-            "update_epochs" : 8,
+            "update_epochs" : 7,
             "discount": 0.95,
             "adv_lambda": 0.95,
             "clip_ratio": 0.15,
-            "target_kl": 0.03,
+            "target_kl": 0.02,
             "target_vf_delta": 1.0,
             "lr_decay": 0.90,
 

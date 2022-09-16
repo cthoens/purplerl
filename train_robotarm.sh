@@ -1,0 +1,1 @@
+python -m purplerl.train_robotarm
