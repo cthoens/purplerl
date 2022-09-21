@@ -24,7 +24,7 @@ from purplerl.vision_models import half_unet_v1
 cfg = GpuConfig()
 
 class RobotArmEnvManager(EnvManager):
-    def __init__(self, file_name, *, port_ = 6064, seed = 0, headless = True, timeout_wait = 120):
+    def __init__(self, file_name, action_scaling = 2.0, *, port_ = 6064, seed = 0, headless = True, timeout_wait = 120):
         self.stats_channel = StatsSideChannel()
         self.params_channel = EnvironmentParametersChannel()
         self.config_channel = EngineConfigurationChannel()
@@ -43,6 +43,7 @@ class RobotArmEnvManager(EnvManager):
         self.behavior_name = list(self.env.behavior_specs)[0]
         decision_steps, _ = self.env.get_steps(self.behavior_name)
         self.env_count = len(decision_steps)
+        self.action_scaling = action_scaling
 
         spec = self.env.behavior_specs[self.behavior_name]
         for idx, spec in enumerate(spec.observation_specs):
@@ -105,7 +106,7 @@ class RobotArmEnvManager(EnvManager):
         discrete_actions = np.array([[]], dtype=np.float32)
         for agent_id in decision_steps:
             # TODO: Add action scaling parameter
-            continuous_actions = 3.0 * act[agent_id].reshape((1, -1))
+            continuous_actions = self.action_scaling * act[agent_id].reshape((1, -1))
             action_tuple = ActionTuple(continuous_actions, discrete_actions)
 
             self.env.set_action_for_agent(self.behavior_name, agent_id, action_tuple)
@@ -227,7 +228,8 @@ class RobotArmObsEncoder(torch.nn.Module):
 
         # flatten buffer dimensions since the cnn only accepts 3D or 4D input
         enc_training = self.cnn_layers(training_obs)
-        enc_goal = self.cnn_layers(goal_obs)
+        with torch.no_grad():
+            enc_goal = self.cnn_layers(goal_obs)
 
         return torch.concat((enc_training, enc_goal, joint_pos, remaining), -1)
 
@@ -245,6 +247,7 @@ def run(dev_mode = False):
             "target_kl": 0.02,
             "target_vf_delta": 1.0,
             "lr_decay": 0.90,
+            "action_scaling": 2.0,
 
             "update_batch_size": 50,
             "update_batch_count": 4,
@@ -261,13 +264,14 @@ def run(dev_mode = False):
             "target_kl": 0.02,
             "target_vf_delta": 1.0,
             "lr_decay": 0.90,
+            "action_scaling": 2.0,
 
             "update_batch_size": 50,
             "update_batch_count": 4,
             "epochs": 1000
         }
     }
-    active_phase = "phase2"
+    active_phase = "phase1"
     config = phase_config[active_phase]
     config["phase"] = active_phase
     wandb_mode = "online" if not dev_mode else "disabled"
@@ -289,6 +293,7 @@ def create_trainer(
     target_kl: float = 0.15,
     target_vf_delta: float = 1.0,
     lr_decay: float = 0.95,
+    action_scaling: float = 2.0,
 
     vf_only_update: bool = False,
     update_batch_size: int = 29,
@@ -300,7 +305,7 @@ def create_trainer(
     save_freq = 100
 
     file_name = "/home/cthoens/code/UnityRL/ml-agents-robots/Builds/RobotArm.x86_64"
-    env_manager= RobotArmEnvManager(file_name, headless=True)
+    env_manager= RobotArmEnvManager(file_name, action_scaling = action_scaling, headless = True)
 
     # TODO Tell wandb about it
     num_envs = env_manager.env_count
@@ -309,8 +314,9 @@ def create_trainer(
         obs_encoder = RobotArmObsEncoder(env_manager),
         action_space = env_manager.action_space,
         hidden_sizes = [128, 128],
-        std_scale = 2.0,
-        min_std= torch.as_tensor([0.5, 0.5, 0.5, 0.5, 0.5])
+        std_scale = 0.5,
+        min_std= torch.as_tensor([0.2, 0.2, 0.2, 0.2, 0.2]),
+        max_std= torch.as_tensor([0.6, 0.6, 0.6, 0.6, 0.6])
     ).to(cfg.device)
 
     experience = ExperienceBuffer(

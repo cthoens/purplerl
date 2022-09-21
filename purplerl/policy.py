@@ -93,6 +93,7 @@ class ContinuousPolicy(StochasticPolicy):
         output_activation  = nn.Identity,
         mean_offset: torch.tensor = None,
         min_std: torch.tensor = None,
+        max_std: torch.tensor = None,
         std_scale = 2.0
     ) -> None:
         super().__init__(obs_encoder)
@@ -101,6 +102,7 @@ class ContinuousPolicy(StochasticPolicy):
         self.mean_offset = mean_offset if mean_offset is not None else torch.zeros(*self.action_shape)
         self.std_scale = std_scale
         self.min_std = min_std if min_std is not None else torch.zeros(*self.action_shape)
+        self.max_std = max_std if max_std is not None else torch.full(float("inf"), *self.action_shape)
         mlp_sizes = list(obs_encoder.shape) + hidden_sizes + [np.prod(np.array(self.action_dist_net_output_shape))]
         self.action_dist_net_tail = mlp(sizes=mlp_sizes, output_activation=output_activation)
         self.action_dist_net = nn.Sequential(
@@ -118,7 +120,7 @@ class ContinuousPolicy(StochasticPolicy):
         shape = out.shape[:-1] + self.action_dist_net_output_shape
         out = out.reshape(shape)
         dist_mean = out[...,0]
-        dist_std = torch.max(self.std_scale * torch.exp(out[...,1]), self.min_std)
+        dist_std = torch.clamp(self.std_scale * torch.exp(out[...,1]), self.min_std, self.max_std)
         return Normal(loc=dist_mean + self.mean_offset, scale=dist_std)
 
 
@@ -127,6 +129,7 @@ class ContinuousPolicy(StochasticPolicy):
 
         self.mean_offset = self.mean_offset.to(device)
         self.min_std = self.min_std.to(device)
+        self.max_std = self.max_std.to(device)
 
         return self
 
@@ -245,6 +248,7 @@ class PPO(PolicyUpdater):
         target_kl: float = 0.15,
         target_vf_delta: float = 0.1,
         lr_decay: float = 0.95,
+        entropy_factor : float = 0.0,
         vf_only_update: bool = False
     ) -> None:
         super().__init__(cfg, policy, experience)
@@ -259,6 +263,7 @@ class PPO(PolicyUpdater):
         self.lam = lam
         self.lr_factor = 1.0
         self.lr_decay = lr_decay
+        self.entropy_factor = entropy_factor
         self.update_balance = (self.MAX_UPDATE_BALANCE - self.MIN_UPDATE_BALANCE) / 2.0
         self.vf_only_update = vf_only_update
 
@@ -329,6 +334,7 @@ class PPO(PolicyUpdater):
         totals = torch.zeros(4, requires_grad=False, **self.cfg.tensor_args)
         policy_loss_total, value_loss_total, kl_total, clip_factor_total = totals[0:1], totals[1:2], totals[2:3], totals[3:4]
         policy_loss_count, value_loss_count, kl_count, clip_factor_count = counts[0:1], counts[1:2], counts[2:3], counts[3:4]
+        min_update_value_loss = float("inf")
         last_epoch_value_loss = float("inf")
         #last_epoch_kl = 0.0
         value_loss_old = float("-inf")
@@ -369,9 +375,9 @@ class PPO(PolicyUpdater):
                 # Note: Calculdate even if update_policy == False to check for passive_policy_progression (see below)
 
                 if self.vf_only_update:
-                    batch_policy_loss, kl, clip_factor = self._stationary_policy_loss(logp_old, encoded_obs, act, adv)
+                    batch_policy_loss, kl, clip_factor, entropy = self._stationary_policy_loss(logp_old, encoded_obs, act, adv)
                 else:
-                    batch_policy_loss, kl, clip_factor = self._policy_loss(logp_old, encoded_obs, act, adv)
+                    batch_policy_loss, kl, clip_factor, entropy = self._policy_loss(logp_old, encoded_obs, act, adv)
 
                 kl_total += kl.sum().detach()
                 kl_count += np.prod(kl.shape).item()
@@ -407,12 +413,13 @@ class PPO(PolicyUpdater):
                 # Backward pass
                 # -------------
 
-                loss = batch_policy_loss + batch_value_loss
+                loss = batch_policy_loss + batch_value_loss  + self.entropy_factor * entropy.mean()
                 if not is_validate_epoch:
                     loss.backward()
 
                 del batch_policy_loss
                 del batch_value_loss
+                del entropy
                 del loss
 
             # end for: iterate through dataset batches
@@ -435,7 +442,7 @@ class PPO(PolicyUpdater):
 
             vf_done = False
             epoch_value_loss = value_loss_total.item() / value_loss_count.item()
-            value_loss_increased = epoch_value_loss > last_epoch_value_loss
+            value_loss_increased = epoch_value_loss - last_epoch_value_loss > 0.009 or epoch_value_loss - min_update_value_loss  > 0.009
             value_update_limit_reached = value_loss_old - epoch_value_loss > self.target_vf_delta
             if value_loss_increased or value_update_limit_reached:
                 print("->", end="")
@@ -472,6 +479,8 @@ class PPO(PolicyUpdater):
             else:
                 self.stats[self.VF_DELTA] = value_loss_old - epoch_value_loss
 
+            min_update_value_loss = min(min_update_value_loss, epoch_value_loss)
+
             if not is_first_epoch:
                 self.stats[self.POLICY_EPOCHS] += 1
                 self.stats[self.KL] = kl_total.item() / kl_count.item()
@@ -499,7 +508,7 @@ class PPO(PolicyUpdater):
         return True
 
 
-    def _stationary_policy_loss(self, logp_old, encoded_obs, act, adv) -> Tuple[torch.tensor, float, float, float]:
+    def _stationary_policy_loss(self, logp_old, encoded_obs, act, adv) -> Tuple[torch.tensor, torch.tensor, torch.tensor, torch.tensor]:
         # Policy loss
         action_dist = self.policy.action_dist(encoded_obs=encoded_obs)
         logp = action_dist.log_prob(act).sum(-1)
@@ -508,11 +517,12 @@ class PPO(PolicyUpdater):
         # Stats
         kl = logp_old - logp
         clip_factor = torch.zeros(1)
+        entropy = torch.zeros(0)
 
-        return loss, kl, clip_factor
+        return loss, kl, clip_factor, entropy
 
 
-    def _policy_loss(self, logp_old, encoded_obs, act, adv) -> Tuple[torch.tensor, float, float, float]:
+    def _policy_loss(self, logp_old, encoded_obs, act, adv) -> Tuple[torch.tensor, torch.tensor, torch.tensor, torch.tensor]:
         # Policy loss
         action_dist = self.policy.action_dist(encoded_obs=encoded_obs)
         logp = action_dist.log_prob(act).sum(-1)
@@ -522,10 +532,11 @@ class PPO(PolicyUpdater):
 
         # Stats
         kl = logp_old - logp
+        entropy = action_dist.entropy()
         clipped = ratio.gt(1+self.clip_ratio) | ratio.lt(1-self.clip_ratio)
         clip_factor = torch.as_tensor(clipped, dtype=torch.float32)
 
-        return loss, kl, clip_factor
+        return loss, kl, clip_factor, entropy
 
 
     def value_estimate(self, encoded_obs):

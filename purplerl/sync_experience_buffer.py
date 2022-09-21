@@ -156,7 +156,7 @@ class ExperienceBuffer:
         return self.ep_return[:self.ep_count].mean().item()
 
     def mean_disc_reward(self) -> float:
-        return self.discounted_reward[:self.ep_count].mean().item()
+        return self.discounted_reward.mean().item()
 
     def success_rate(self) -> float:
         return self.ep_success_count / self.ep_success_info_count
