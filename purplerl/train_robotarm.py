@@ -246,31 +246,14 @@ def run(dev_mode = False):
             "update_epochs" : 7,
             "discount": 0.95,
             "adv_lambda": 0.95,
-            "clip_ratio": 0.15,
+            "clip_ratio": 0.10,
             "target_kl": 0.02,
             "target_vf_delta": 1.0,
             "lr_decay": 0.90,
             "action_scaling": 2.0,
 
-            "update_batch_size": 50,
-            "update_batch_count": 4,
-            "epochs": 1000
-        },
-        "phase2": {
-            "vf_only_update": False,
-            "policy_lr": 2e-5,
-            "vf_lr": 2e-4,
-            "update_epochs" : 7,
-            "discount": 0.95,
-            "adv_lambda": 0.95,
-            "clip_ratio": 0.15,
-            "target_kl": 0.02,
-            "target_vf_delta": 1.0,
-            "lr_decay": 0.90,
-            "action_scaling": 2.0,
-
-            "update_batch_size": 50,
-            "update_batch_count": 4,
+            "update_batch_size": 75,
+            "update_batch_count": 2,
             "epochs": 1000
         }
     }
@@ -305,7 +288,7 @@ def create_trainer(
 ):
     buffer_size = update_batch_size * update_batch_count
 
-    save_freq = 100
+    save_freq = 50
 
     file_name = "/home/cthoens/code/UnityRL/ml-agents-robots/Builds/RobotArm.x86_64"
     env_manager= RobotArmEnvManager(file_name, action_scaling = action_scaling)
