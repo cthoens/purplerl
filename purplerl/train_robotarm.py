@@ -24,7 +24,9 @@ from purplerl.vision_models import half_unet_v1
 cfg = GpuConfig()
 
 class RobotArmEnvManager(EnvManager):
-    def __init__(self, file_name, action_scaling = 2.0, *, port_ = 6064, seed = 0, headless = True, timeout_wait = 120):
+    def __init__(self, file_name, action_scaling = 2.0, *, port_ = 6064, seed = 0, timeout_wait = 120):
+        self.action_scaling = action_scaling
+
         self.stats_channel = StatsSideChannel()
         self.params_channel = EnvironmentParametersChannel()
         self.config_channel = EngineConfigurationChannel()
@@ -33,7 +35,8 @@ class RobotArmEnvManager(EnvManager):
             worker_id=0,
             base_port=port_,
             seed=seed,
-            no_graphics=headless,
+            # Note: In headless mode visual observations deliver bank images!!!
+            no_graphics=False,
             timeout_wait=timeout_wait,
             side_channels=[self.stats_channel, self.params_channel],
             log_folder="."
@@ -43,7 +46,6 @@ class RobotArmEnvManager(EnvManager):
         self.behavior_name = list(self.env.behavior_specs)[0]
         decision_steps, _ = self.env.get_steps(self.behavior_name)
         self.env_count = len(decision_steps)
-        self.action_scaling = action_scaling
 
         spec = self.env.behavior_specs[self.behavior_name]
         for idx, spec in enumerate(spec.observation_specs):
@@ -93,6 +95,8 @@ class RobotArmEnvManager(EnvManager):
 
         self.action_space = Box(float("-inf"), float("inf"), (5, ))
 
+        self.set_lesson(0)
+
     def reset(self):
         self.env.reset()
 
@@ -105,7 +109,6 @@ class RobotArmEnvManager(EnvManager):
         decision_steps, terminal_steps = self.env.get_steps(self.behavior_name)
         discrete_actions = np.array([[]], dtype=np.float32)
         for agent_id in decision_steps:
-            # TODO: Add action scaling parameter
             continuous_actions = self.action_scaling * act[agent_id].reshape((1, -1))
             action_tuple = ActionTuple(continuous_actions, discrete_actions)
 
@@ -131,7 +134,7 @@ class RobotArmEnvManager(EnvManager):
 
 
     def set_lesson(self, lesson):
-        if lesson > 1:
+        if lesson > 3:
             return False;
 
         self.params_channel.set_float_parameter("lessonIndex", lesson)
@@ -305,7 +308,7 @@ def create_trainer(
     save_freq = 100
 
     file_name = "/home/cthoens/code/UnityRL/ml-agents-robots/Builds/RobotArm.x86_64"
-    env_manager= RobotArmEnvManager(file_name, action_scaling = action_scaling, headless = True)
+    env_manager= RobotArmEnvManager(file_name, action_scaling = action_scaling)
 
     # TODO Tell wandb about it
     num_envs = env_manager.env_count
