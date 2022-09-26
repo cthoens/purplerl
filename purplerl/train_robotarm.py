@@ -38,7 +38,7 @@ class RobotArmEnvManager(EnvManager):
             # Note: In headless mode visual observations deliver bank images!!!
             no_graphics=False,
             timeout_wait=timeout_wait,
-            side_channels=[self.stats_channel, self.params_channel],
+            side_channels=[self.stats_channel, self.params_channel, self.config_channel],
             log_folder="."
         )
 
@@ -96,6 +96,7 @@ class RobotArmEnvManager(EnvManager):
         self.action_space = Box(float("-inf"), float("inf"), (5, ))
 
         self.set_lesson(0)
+        self.config_channel.set_configuration_parameters(time_scale=20, target_frame_rate=2, capture_frame_rate=2)
 
     def reset(self):
         self.env.reset()
@@ -138,7 +139,7 @@ class RobotArmEnvManager(EnvManager):
             return False;
 
         self.params_channel.set_float_parameter("lessonIndex", lesson)
-        return False
+        return True
 
 
     def _get_obs(self) -> tuple[np.array, list[float]]:
@@ -240,8 +241,9 @@ class RobotArmObsEncoder(torch.nn.Module):
 def run(dev_mode = False):
     phase_config = {
         "phase1": {
-            "vf_only_update": False,
-            "policy_lr": 2e-5,
+            "new_lesson_vf_only_updates": 5,
+            "lesson_timeout_episodes": 80,
+            "policy_lr": 2e-4,
             "vf_lr": 2e-4,
             "update_epochs" : 7,
             "discount": 0.95,
@@ -281,7 +283,8 @@ def create_trainer(
     lr_decay: float = 0.95,
     action_scaling: float = 2.0,
 
-    vf_only_update: bool = False,
+    lesson_timeout_episodes: int = 80,
+    new_lesson_vf_only_updates: int = 0,
     update_batch_size: int = 29,
     update_batch_count: int = 2,
     epochs: int = 3000
@@ -322,7 +325,6 @@ def create_trainer(
         policy = policy,
         experience = experience,
         hidden_sizes = [128, 128],
-        vf_only_update= vf_only_update,
         policy_lr = policy_lr,
         vf_lr = vf_lr,
         update_epochs = update_epochs,
@@ -342,6 +344,8 @@ def create_trainer(
         experience = experience,
         policy = policy,
         policy_updater = policy_updater,
+        lesson_timeout_episodes = lesson_timeout_episodes,
+        new_lesson_vf_only_updates = new_lesson_vf_only_updates,
         epochs = epochs,
         save_freq = save_freq,
         output_dir= out_dir,

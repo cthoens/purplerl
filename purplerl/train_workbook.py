@@ -173,7 +173,7 @@ def create_trainer(
         policy = policy,
         experience = experience,
         hidden_sizes = [128, 128],
-        vf_only_update= vf_only_update,
+        vf_only_updates= vf_only_update,
         policy_lr = policy_lr,
         vf_lr = vf_lr,
         update_epochs = update_epochs,

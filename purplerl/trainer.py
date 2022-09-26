@@ -12,7 +12,7 @@ import wandb
 from purplerl.environment import EnvManager
 from purplerl.sync_experience_buffer import ExperienceBuffer
 from purplerl.policy import StochasticPolicy
-from purplerl.policy import PolicyUpdater
+from purplerl.policy import PPO
 
 
 class Trainer:
@@ -30,7 +30,9 @@ class Trainer:
         env_manager: EnvManager,
         experience: ExperienceBuffer,
         policy: StochasticPolicy,
-        policy_updater: PolicyUpdater,
+        policy_updater: PPO,
+        new_lesson_vf_only_updates: int,
+        lesson_timeout_episodes: int = 100,
         epochs=50,
         save_freq=20,
         output_dir="",
@@ -46,6 +48,8 @@ class Trainer:
         self.save_freq=save_freq
         self.lesson = 0
         self.lesson_start_epoch = 0
+        self.lesson_timeout_episodes = lesson_timeout_episodes
+        self.new_lesson_vf_only_updates = new_lesson_vf_only_updates
         self.resume_epoch = 1 # have epochs start at 1 and not 0
         self.eval_func=eval_func
         self.output_dir = output_dir
@@ -80,12 +84,12 @@ class Trainer:
                  max_disc_reward = epoch_disc_reward
                  max_disc_reward_epoch = self.epoch
 
-            TIMEOUT_EPISODES = 100
             lesson_timeout = self.epoch - max_disc_reward_epoch
-            self.own_stats[self.LESSON_TIMEOUT] = min((TIMEOUT_EPISODES - lesson_timeout) / TIMEOUT_EPISODES, 1.0)
-            if lesson_timeout > TIMEOUT_EPISODES:
+            self.own_stats[self.LESSON_TIMEOUT] = min((self.lesson_timeout_episodes - lesson_timeout) / self.lesson_timeout_episodes, 1.0)
+            if lesson_timeout > self.lesson_timeout_episodes:
                  self.lesson += 1
                  self.lesson_start_epoch = self.epoch + 1
+                 self.policy_updater.remaining_vf_only_updates = self.new_lesson_vf_only_updates
                  max_disc_reward = float('-inf')
                  max_disc_reward_epoch = self.epoch + 1
                  self.own_stats[self.LESSON] = self.lesson
@@ -152,7 +156,6 @@ class Trainer:
                 next_obs = torch.as_tensor(next_obs, **self.cfg.tensor_args)
 
                 self.experience.step(obs, act, rew)
-                self.policy_updater.step()
                 self.policy_updater.end_episode(done)
                 self.experience.end_episode(done, success)
                 obs = next_obs

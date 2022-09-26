@@ -12,11 +12,11 @@ from PIL import Image, ImageDraw
 import purplerl.config
 import purplerl.workbook_env as Env
 from purplerl.workbook_env import WorkbookEnv
-from purplerl.policy import PolicyUpdater
+from purplerl.policy import PPO
 
 color_map = plt.get_cmap('RdYlGn')
 
-def do_eval(out_dir, epoch, lesson, policy_updater: PolicyUpdater):
+def do_eval(out_dir, epoch, lesson, policy_updater: PPO):
     if epoch % 50 != 0:
         return
 
@@ -51,7 +51,7 @@ def do_eval(out_dir, epoch, lesson, policy_updater: PolicyUpdater):
     return plt
 
 
-def evaluate(env: WorkbookEnv, state, policy_updater: PolicyUpdater):
+def evaluate(env: WorkbookEnv, state, policy_updater: PPO):
     env.reset(sheet_state = state)
 
     spawn_points = env._get_spawn_points(env.sheet)

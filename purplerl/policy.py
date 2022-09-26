@@ -147,78 +147,9 @@ class ContinuousPolicy(StochasticPolicy):
         #self.std_scale = checkpoint['action_dist_std_scale']
 
 
-
-class PolicyUpdater:
+class PPO():
     POLICY_LOSS = "Policy Loss"
     POLICY_LR = "Policy LR"
-
-
-    def __init__(self,
-        cfg: dict,
-        policy: ContinuousPolicy,
-        experience: ExperienceBuffer
-    ) -> None:
-        self.cfg = cfg
-        self.policy = policy
-        self.experience = experience
-        self.stats = {}
-
-
-    def step(self):
-        """
-        Called after a new environment step was added to the experience buffer. Called before end_episode().
-        """
-        pass
-
-
-    def reset(self):
-        self.weight[...] = 0.0
-
-        for stat in self.stats.keys():
-            self.stats[stat] = None
-
-
-    def end_episode(self, finished_envs: torch.Tensor):
-        for env_idx, finished in enumerate(finished_envs):
-            if not finished:
-                continue
-
-            if self.experience.next_step_index==self.experience.ep_start_index[env_idx]:
-                raise Exception("policy_updater.end_episode must be called before experience_buffer.end_episode!")
-
-            self._end_env_episode(env_idx)
-
-
-    def buffer_full(self, last_state_value_estimate: torch.tensor):
-        assert(self.experience.next_step_index == self.experience.buffer_size)
-        for env_idx in range(self.experience.num_envs):
-            #  there is nothing to do if this batch just finished an episode
-            if self.experience.ep_start_index[env_idx] == self.experience.next_step_index:
-                continue
-
-            self._finish_env_path(env_idx, last_state_value_estimate[env_idx])
-
-
-    def update(self):
-        pass
-
-    def value_estimate(self, encoded_obs):
-        pass
-
-    def checkpoint(self):
-        pass
-
-    def load_checkpoint(self, checkpoint):
-        pass
-
-    def _end_env_episode(self, env_idx: int):
-        pass
-
-    def _finish_env_path(self, env_idx, last_state_value_estimate: float):
-        pass
-
-
-class PPO(PolicyUpdater):
     KL = "KL"
     POLICY_EPOCHS = "Policy Epochs"
     VF_EPOCHS = "VF Epochs"
@@ -249,10 +180,11 @@ class PPO(PolicyUpdater):
         target_vf_delta: float = 0.1,
         lr_decay: float = 0.95,
         entropy_factor : float = 0.0,
-        vf_only_update: bool = False
+        vf_only_updates: int = 0
     ) -> None:
-        super().__init__(cfg, policy, experience)
-
+        self.cfg = cfg
+        self.policy = policy
+        self.experience = experience
         self.initial_policy_lr = policy_lr
         self.initial_vf_lr = vf_lr
         self.update_epochs = update_epochs
@@ -265,7 +197,8 @@ class PPO(PolicyUpdater):
         self.lr_decay = lr_decay
         self.entropy_factor = entropy_factor
         self.update_balance = (self.MAX_UPDATE_BALANCE - self.MIN_UPDATE_BALANCE) / 2.0
-        self.vf_only_update = vf_only_update
+        self.remaining_vf_only_updates = vf_only_updates
+        self.stats = {}
 
         self.value_net_tail = mlp(list(policy.obs_encoder.shape) + hidden_sizes + [1]).to(cfg.device)
 
@@ -302,6 +235,10 @@ class PPO(PolicyUpdater):
     def update(self):
         for _ in range(self.update_epochs // 2):
             if self._do_update():
+                if self.remaining_vf_only_updates>0:
+                    print(f"* {self.remaining_vf_only_updates}", end=None)
+                self.remaining_vf_only_updates = max(self.remaining_vf_only_updates - 1, 0)
+
                 return
 
             # Note: Must be done after restoring the checkpoint
@@ -334,7 +271,6 @@ class PPO(PolicyUpdater):
         totals = torch.zeros(4, requires_grad=False, **self.cfg.tensor_args)
         policy_loss_total, value_loss_total, kl_total, clip_factor_total = totals[0:1], totals[1:2], totals[2:3], totals[3:4]
         policy_loss_count, value_loss_count, kl_count, clip_factor_count = counts[0:1], counts[1:2], counts[2:3], counts[3:4]
-        min_update_value_loss = float("inf")
         last_epoch_value_loss = float("inf")
         #last_epoch_kl = 0.0
         value_loss_old = float("-inf")
@@ -374,7 +310,7 @@ class PPO(PolicyUpdater):
                 # -------------
                 # Note: Calculdate even if update_policy == False to check for passive_policy_progression (see below)
 
-                if self.vf_only_update:
+                if self.remaining_vf_only_updates > 0:
                     batch_policy_loss, kl, clip_factor, entropy = self._stationary_policy_loss(logp_old, encoded_obs, act, adv)
                 else:
                     batch_policy_loss, kl, clip_factor, entropy = self._policy_loss(logp_old, encoded_obs, act, adv)
@@ -442,7 +378,7 @@ class PPO(PolicyUpdater):
 
             vf_done = False
             epoch_value_loss = value_loss_total.item() / value_loss_count.item()
-            value_loss_increased = epoch_value_loss - last_epoch_value_loss > 0.009 or epoch_value_loss - min_update_value_loss  > 0.009
+            value_loss_increased = epoch_value_loss > last_epoch_value_loss
             value_update_limit_reached = value_loss_old - epoch_value_loss > self.target_vf_delta
             if value_loss_increased or value_update_limit_reached:
                 print("->", end="")
@@ -478,8 +414,6 @@ class PPO(PolicyUpdater):
                 value_loss_old = epoch_value_loss
             else:
                 self.stats[self.VF_DELTA] = value_loss_old - epoch_value_loss
-
-            min_update_value_loss = min(min_update_value_loss, epoch_value_loss)
 
             if not is_first_epoch:
                 self.stats[self.POLICY_EPOCHS] += 1
@@ -582,7 +516,8 @@ class PPO(PolicyUpdater):
             'initial_policy_lr': self.initial_policy_lr,
             'initial_vf_lr': self.initial_vf_lr,
             'lr_factor': self.lr_factor,
-            'update_balance': self.update_balance
+            'update_balance': self.update_balance,
+            'vf_only_update': self.remaining_vf_only_updates
         }
 
 
@@ -592,7 +527,8 @@ class PPO(PolicyUpdater):
         self.initial_policy_lr = checkpoint['initial_policy_lr']
         self.initial_vf_lr = checkpoint['initial_vf_lr']
         self.lr_factor = checkpoint['lr_factor']
-        self.update_balance = checkpoint['update_balance']
+        self.update_balance = checkpoint['update_balance'],
+        self.remaining_vf_only_updates = checkpoint.get('vf_only_update', 0)
 
 
     def _full_checkpoint(self):
@@ -606,3 +542,31 @@ class PPO(PolicyUpdater):
     def _load_full_checkpoint(self, checkpoint):
         self.policy.load_checkpoint(checkpoint["policy"])
         self.load_checkpoint(checkpoint["policy_updater"])
+
+
+    def reset(self):
+        self.weight[...] = 0.0
+
+        for stat in self.stats.keys():
+            self.stats[stat] = None
+
+
+    def end_episode(self, finished_envs: torch.Tensor):
+        for env_idx, finished in enumerate(finished_envs):
+            if not finished:
+                continue
+
+            if self.experience.next_step_index==self.experience.ep_start_index[env_idx]:
+                raise Exception("policy_updater.end_episode must be called before experience_buffer.end_episode!")
+
+            self._end_env_episode(env_idx)
+
+
+    def buffer_full(self, last_state_value_estimate: torch.tensor):
+        assert(self.experience.next_step_index == self.experience.buffer_size)
+        for env_idx in range(self.experience.num_envs):
+            #  there is nothing to do if this batch just finished an episode
+            if self.experience.ep_start_index[env_idx] == self.experience.next_step_index:
+                continue
+
+            self._finish_env_path(env_idx, last_state_value_estimate[env_idx])
