@@ -12,7 +12,7 @@ from torch.utils.data import TensorDataset, DataLoader
 
 from torch.optim import Adam
 
-from purplerl.sync_experience_buffer import ExperienceBuffer, discount_cumsum
+from purplerl.experience_buffer import ExperienceBuffer, discount_cumsum
 
 
 def mlp(sizes, activation=nn.ReLU, output_activation=nn.Identity):

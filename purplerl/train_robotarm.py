@@ -6,15 +6,14 @@ import torch
 
 import wandb
 
-from mlagents_envs.side_channel.engine_configuration_channel import EngineConfig
 from mlagents_envs.side_channel.stats_side_channel import StatsSideChannel
 from mlagents_envs.side_channel.environment_parameters_channel import EnvironmentParametersChannel
 from mlagents_envs.side_channel.engine_configuration_channel import EngineConfigurationChannel
 from mlagents_envs.environment import UnityEnvironment, ActionTuple
 
-from gym.spaces import Box, MultiDiscrete
+from gym.spaces import Box
 
-from purplerl.sync_experience_buffer import ExperienceBuffer
+from purplerl.experience_buffer import ExperienceBuffer
 from purplerl.trainer import Trainer
 from purplerl.environment import EnvManager
 from purplerl.policy import ContinuousPolicy, PPO

@@ -10,7 +10,7 @@ import numpy as np
 import torch
 import wandb
 from purplerl.environment import EnvManager
-from purplerl.sync_experience_buffer import ExperienceBuffer
+from purplerl.experience_buffer import ExperienceBuffer
 from purplerl.policy import StochasticPolicy
 from purplerl.policy import PPO
 

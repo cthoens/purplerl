@@ -7,7 +7,7 @@ import numpy as np
 import torch
 import wandb
 
-from purplerl.sync_experience_buffer import ExperienceBuffer
+from purplerl.experience_buffer import ExperienceBuffer
 from purplerl.trainer import Trainer
 from purplerl.environment import GymEnvManager
 from purplerl.policy import ContinuousPolicy, PPO
