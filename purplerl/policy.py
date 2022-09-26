@@ -380,7 +380,7 @@ class PPO():
             epoch_value_loss = value_loss_total.item() / value_loss_count.item()
             value_loss_increased = epoch_value_loss > last_epoch_value_loss
             value_update_limit_reached = value_loss_old - epoch_value_loss > self.target_vf_delta
-            if value_loss_increased or value_update_limit_reached:
+            if epoch_value_loss > 0.02 and (value_loss_increased or value_update_limit_reached):
                 print("->", end="")
                 self.stats[self.BACKTRACK_VF] = 1.0
                 backtrack = True
