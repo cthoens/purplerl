@@ -67,31 +67,31 @@ class Trainer:
 
 
     def run_training(self):
-        max_disc_reward = float('-inf')
-        max_disc_reward_epoch = 0
+        max_mean_return = float('-inf')
+        max_mean_return_epoch = 0
         for self.epoch in range(self.epochs):
             self.run_epoch()
             wandb.log(copy.deepcopy(self.all_stats), step=self.epoch)
             self.log_to_console()
 
 
-            epoch_disc_reward = self.experience.mean_disc_reward()
+            epoch_mean_return = self.experience.mean_return()
             lesson_warmup_phase = self.epoch - self.lesson_start_epoch <= 30
             if lesson_warmup_phase:
-                 max_disc_reward_epoch = self.epoch + 1
-                 max_disc_reward = float('-inf')
-            elif epoch_disc_reward > max_disc_reward:
-                 max_disc_reward = epoch_disc_reward
-                 max_disc_reward_epoch = self.epoch
+                 max_mean_return_epoch = self.epoch + 1
+                 max_mean_return = float('-inf')
+            elif epoch_mean_return > max_mean_return:
+                 max_mean_return = epoch_mean_return
+                 max_mean_return_epoch = self.epoch
 
-            lesson_timeout = self.epoch - max_disc_reward_epoch
+            lesson_timeout = self.epoch - max_mean_return_epoch
             self.own_stats[self.LESSON_TIMEOUT] = min((self.lesson_timeout_episodes - lesson_timeout) / self.lesson_timeout_episodes, 1.0)
             if lesson_timeout > self.lesson_timeout_episodes:
                  self.lesson += 1
                  self.lesson_start_epoch = self.epoch + 1
                  self.policy_updater.remaining_vf_only_updates = self.new_lesson_vf_only_updates
-                 max_disc_reward = float('-inf')
-                 max_disc_reward_epoch = self.epoch + 1
+                 max_mean_return = float('-inf')
+                 max_mean_return_epoch = self.epoch + 1
                  self.own_stats[self.LESSON] = self.lesson
                  self.save_checkpoint(f"lesson {self.lesson}.pt")
 

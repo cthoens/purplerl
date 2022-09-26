@@ -407,17 +407,27 @@ class PPO():
 
                 return not is_after_first_update
 
+            mean_kl = kl_total.item() / kl_count.item()
+            vf_delta = value_loss_old - epoch_value_loss
+            update_too_small = not is_first_epoch and not is_validate_epoch and vf_delta < 0.009 and mean_kl < 0.009
+            if update_too_small:
+                self.lr_factor *= self.lr_decay
+                print(f"====> {self.lr_factor:.6f}")
+                for group in self.optimizer.param_groups:
+                    group['lr'] = group['lr'] * self.lr_decay
+
+
             last_epoch_value_loss = epoch_value_loss
             #last_epoch_kl = epoch_kl
 
             if is_first_epoch:
                 value_loss_old = epoch_value_loss
             else:
-                self.stats[self.VF_DELTA] = value_loss_old - epoch_value_loss
+                self.stats[self.VF_DELTA] = vf_delta
 
             if not is_first_epoch:
                 self.stats[self.POLICY_EPOCHS] += 1
-                self.stats[self.KL] = kl_total.item() / kl_count.item()
+                self.stats[self.KL] = mean_kl
                 if clip_factor_count != 0:
                     self.stats[self.POLICY_LOSS] = policy_loss_total.item() / policy_loss_count.item()
                     self.stats[self.CLIP_FACTOR] = clip_factor_total.item() / clip_factor_count.item()
