@@ -240,7 +240,7 @@ class RobotArmObsEncoder(torch.nn.Module):
 def run(dev_mode = False):
     phase_config = {
         "phase1": {
-            "new_lesson_vf_only_updates": 5,
+            "new_lesson_vf_only_updates": 8,
             "lesson_timeout_episodes": 80,
             "policy_lr": 2e-4,
             "vf_lr": 2e-4,

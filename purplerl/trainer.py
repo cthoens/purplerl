@@ -1,4 +1,5 @@
 import copy
+from email import policy
 import time
 import joblib
 import os
@@ -86,7 +87,7 @@ class Trainer:
 
             lesson_timeout = self.epoch - max_mean_return_epoch
             self.own_stats[self.LESSON_TIMEOUT] = min((self.lesson_timeout_episodes - lesson_timeout) / self.lesson_timeout_episodes, 1.0)
-            if lesson_timeout > self.lesson_timeout_episodes:
+            if lesson_timeout > self.lesson_timeout_episodes or (self.experience.success_rate() > 0.99 and lesson_timeout > 30):
                  self.lesson += 1
                  self.lesson_start_epoch = self.epoch + 1
                  self.policy_updater.remaining_vf_only_updates = self.new_lesson_vf_only_updates

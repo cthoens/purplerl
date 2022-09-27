@@ -163,7 +163,7 @@ class PPO():
 
     MIN_UPDATE_BALANCE = 0.0
     MAX_UPDATE_BALANCE = 1.0
-    UPDATE_BALANCE_STEP = 0.01
+    UPDATE_BALANCE_STEP = 0.001
 
     def __init__(self,
         cfg: dict,
