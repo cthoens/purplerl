@@ -242,20 +242,8 @@ class PPO():
                 return
 
             # Note: Must be done after restoring the checkpoint
-            self.lr_factor *= self.lr_decay
-            print(f"====> {self.lr_factor:.6f}")
-            for group in self.optimizer.param_groups:
-                group['lr'] = group['lr'] * self.lr_decay
+            self._set_lr_factor(self.lr_factor * self.lr_decay)
 
-            # reset the optimizer to make sure momentum does not keep driving
-            # the parameters into the wrong direction
-            vf_lr = self.initial_vf_lr * self.lr_factor
-            policy_lr = self.initial_policy_lr * self.lr_factor
-            self.optimizer = Adam([
-                {'params': self.policy.obs_encoder.parameters(), 'lr': max(vf_lr, policy_lr)},
-                {'params': self.policy.action_dist_net_tail.parameters(), 'lr': policy_lr},
-                {'params': self.value_net_tail.parameters(), 'lr': vf_lr}
-            ])
 
     def _do_update(self):
         for key in self.stats:
@@ -380,7 +368,7 @@ class PPO():
             epoch_value_loss = value_loss_total.item() / value_loss_count.item()
             value_loss_increased = epoch_value_loss > last_epoch_value_loss
             value_update_limit_reached = value_loss_old - epoch_value_loss > self.target_vf_delta
-            if epoch_value_loss > 0.02 and (value_loss_increased or value_update_limit_reached):
+            if value_loss_increased or value_update_limit_reached:
                 print("->", end="")
                 self.stats[self.BACKTRACK_VF] = 1.0
                 backtrack = True
@@ -400,22 +388,9 @@ class PPO():
                 self.update_balance = update_balance_backup
 
                 if not is_after_first_update:
-                    self.lr_factor *= self.lr_decay
-                    print(f"====> {self.lr_factor:.6f}")
-                    for group in self.optimizer.param_groups:
-                        group['lr'] = group['lr'] * self.lr_decay
+                    self._dec_lr_factor()
 
                 return not is_after_first_update
-
-            mean_kl = kl_total.item() / kl_count.item()
-            vf_delta = value_loss_old - epoch_value_loss
-            update_too_small = not is_first_epoch and not is_validate_epoch and vf_delta < 0.009 and mean_kl < 0.009
-            if update_too_small:
-                self.lr_factor *= self.lr_decay
-                print(f"====> {self.lr_factor:.6f}")
-                for group in self.optimizer.param_groups:
-                    group['lr'] = group['lr'] * self.lr_decay
-
 
             last_epoch_value_loss = epoch_value_loss
             #last_epoch_kl = epoch_kl
@@ -423,11 +398,11 @@ class PPO():
             if is_first_epoch:
                 value_loss_old = epoch_value_loss
             else:
-                self.stats[self.VF_DELTA] = vf_delta
+                self.stats[self.VF_DELTA] = value_loss_old - epoch_value_loss
 
             if not is_first_epoch:
                 self.stats[self.POLICY_EPOCHS] += 1
-                self.stats[self.KL] = mean_kl
+                self.stats[self.KL] = kl_total.item() / kl_count.item()
                 if clip_factor_count != 0:
                     self.stats[self.POLICY_LOSS] = policy_loss_total.item() / policy_loss_count.item()
                     self.stats[self.CLIP_FACTOR] = clip_factor_total.item() / clip_factor_count.item()
@@ -440,6 +415,12 @@ class PPO():
                 self.optimizer.step()
 
 
+        self._inc_lr_factor()
+
+        return True
+
+
+    def _inc_lr_factor(self):
         # find factor such that applying applying it decay_revert_steps times reverts one decay step
         decay_revert_steps = 3
         factor = (1.0 / self.lr_decay)**(1/decay_revert_steps)
@@ -449,7 +430,29 @@ class PPO():
         for group in self.optimizer.param_groups:
             group['lr'] = group['lr'] * factor
 
-        return True
+
+    def _dec_lr_factor(self):
+        self.lr_factor *= self.lr_decay
+        print(f"====> {self.lr_factor:.6f}")
+        for group in self.optimizer.param_groups:
+            group['lr'] = group['lr'] * self.lr_decay
+
+
+    def _set_lr_factor(self, value):
+        self.lr_factor = value
+        print(f"====> {self.lr_factor:.6f}")
+        for group in self.optimizer.param_groups:
+            group['lr'] = group['lr'] * self.lr_decay
+
+        # reset the optimizer to make sure momentum does not keep driving
+        # the parameters into the wrong direction
+        vf_lr = self.initial_vf_lr * self.lr_factor
+        policy_lr = self.initial_policy_lr * self.lr_factor
+        self.optimizer = Adam([
+            {'params': self.policy.obs_encoder.parameters(), 'lr': max(vf_lr, policy_lr)},
+            {'params': self.policy.action_dist_net_tail.parameters(), 'lr': policy_lr},
+            {'params': self.value_net_tail.parameters(), 'lr': vf_lr}
+        ])
 
 
     def _stationary_policy_loss(self, logp_old, encoded_obs, act, adv) -> Tuple[torch.tensor, torch.tensor, torch.tensor, torch.tensor]:
@@ -537,7 +540,7 @@ class PPO():
         self.initial_policy_lr = checkpoint['initial_policy_lr']
         self.initial_vf_lr = checkpoint['initial_vf_lr']
         self.lr_factor = checkpoint['lr_factor']
-        self.update_balance = checkpoint['update_balance'],
+        self.update_balance = checkpoint['update_balance']
         self.remaining_vf_only_updates = checkpoint.get('vf_only_update', 0)
 
 

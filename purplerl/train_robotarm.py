@@ -301,7 +301,7 @@ def create_trainer(
     policy= ContinuousPolicy(
         obs_encoder = RobotArmObsEncoder(env_manager),
         action_space = env_manager.action_space,
-        hidden_sizes = [128, 128],
+        hidden_sizes = [64],
         std_scale = 0.5,
         min_std= torch.as_tensor([0.2, 0.2, 0.2, 0.2, 0.2]),
         max_std= torch.as_tensor([0.6, 0.6, 0.6, 0.6, 0.6])
@@ -323,9 +323,10 @@ def create_trainer(
         cfg = cfg,
         policy = policy,
         experience = experience,
-        hidden_sizes = [128, 128],
+        hidden_sizes = [64],
         policy_lr = policy_lr,
         vf_lr = vf_lr,
+        vf_only_updates = new_lesson_vf_only_updates,
         update_epochs = update_epochs,
         update_batch_size=update_batch_size,
         lam = adv_lambda,

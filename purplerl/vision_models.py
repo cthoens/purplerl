@@ -116,5 +116,10 @@ def half_unet_v1(input_resolution, in_channels=1):
             ReLU(inplace=True),
             MaxPool2d(kernel_size=2, stride=2),
             Flatten(),
-            Linear(np.prod(resolution)*64, 128)
+            Linear(np.prod(resolution)*64, 128),
+            ReLU(inplace=True),
+            Linear(128, 128),
+            ReLU(inplace=True),
+            Linear(128, 128),
+            ReLU(inplace=True),
         )

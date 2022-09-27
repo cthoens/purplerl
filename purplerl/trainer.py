@@ -90,6 +90,7 @@ class Trainer:
                  self.lesson += 1
                  self.lesson_start_epoch = self.epoch + 1
                  self.policy_updater.remaining_vf_only_updates = self.new_lesson_vf_only_updates
+                 self.policy_updater._set_lr_factor(1.0)
                  max_mean_return = float('-inf')
                  max_mean_return_epoch = self.epoch + 1
                  self.own_stats[self.LESSON] = self.lesson
