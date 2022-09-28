@@ -77,7 +77,7 @@ class Trainer:
 
 
             epoch_mean_return = self.experience.mean_return()
-            lesson_warmup_phase = self.epoch - self.lesson_start_epoch <= 30
+            lesson_warmup_phase = self.epoch - self.lesson_start_epoch <= self.new_lesson_vf_only_updates
             if lesson_warmup_phase:
                  max_mean_return_epoch = self.epoch + 1
                  max_mean_return = float('-inf')

@@ -38,7 +38,8 @@ class RobotArmEnvManager(EnvManager):
             no_graphics=False,
             timeout_wait=timeout_wait,
             side_channels=[self.stats_channel, self.params_channel, self.config_channel],
-            log_folder="."
+            log_folder=".",
+            additional_args=["-force-vulkan"]
         )
 
         self.env.reset()
