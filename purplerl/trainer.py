@@ -20,8 +20,14 @@ class Trainer:
     EXPERIENCE = "Sample Trajectories"
     POLICY = "Policy"
     TRAINER = "Trainer"
+    TIMING = "Timing"
     ENTROPY = "Entropy"
     LESSON_TIMEOUT = "Lesson Timeout"
+    ENV_TIME = "Env Time"
+    DECISION_TIME = "Decision Time"
+    EXPERIENCE_TIME = "Experience Time"
+    UPDATE_TIME = "Update Time"
+    EVAL_TIME = "Eval Time"
     LESSON = "lesson"
     LESSON_START_EPOCH = "lesson_start_epoch"
     EPOCH = "epoch"
@@ -34,6 +40,7 @@ class Trainer:
         policy_updater: PPO,
         new_lesson_vf_only_updates: int,
         lesson_timeout_episodes: int = 100,
+        resume_lesson: int = None,
         epochs=50,
         save_freq=20,
         output_dir="",
@@ -50,79 +57,102 @@ class Trainer:
         self.lesson = 0
         self.lesson_start_epoch = 0
         self.lesson_timeout_episodes = lesson_timeout_episodes
+        self.resume_lesson = resume_lesson
         self.new_lesson_vf_only_updates = new_lesson_vf_only_updates
         self.resume_epoch = 1 # have epochs start at 1 and not 0
         self.eval_func=eval_func
         self.output_dir = output_dir
-        self.experience_duration = None
-        self.update_duration = None
+        self.max_mean_return = float('-inf')
+        self.max_mean_return_epoch = 0
         self.own_stats = {
             self.ENTROPY: -1.0,
             self.LESSON: 0
         }
+        self.timig_stats = {
+            self.ENV_TIME: 0.0,
+            self.DECISION_TIME: 0.0,
+            self.EXPERIENCE_TIME: 0.0,
+            self.UPDATE_TIME: 0.0,
+            self.EVAL_TIME: 0.0
+        }
         self.all_stats = {
             self.EXPERIENCE: self.experience.stats,
             self.POLICY: self.policy_updater.stats,
-            self.TRAINER: self.own_stats
+            self.TRAINER: self.own_stats,
+            self.TIMING: self.timig_stats
         }
 
 
     def run_training(self):
-        max_mean_return = float('-inf')
-        max_mean_return_epoch = 0
         for self.epoch in range(self.epochs):
             self.run_epoch()
             wandb.log(copy.deepcopy(self.all_stats), step=self.epoch)
             self.log_to_console()
 
-
             epoch_mean_return = self.experience.mean_return()
             lesson_warmup_phase = self.epoch - self.lesson_start_epoch <= self.new_lesson_vf_only_updates
             if lesson_warmup_phase:
-                 max_mean_return_epoch = self.epoch + 1
-                 max_mean_return = float('-inf')
-            elif epoch_mean_return > max_mean_return:
-                 max_mean_return = epoch_mean_return
-                 max_mean_return_epoch = self.epoch
+                 self.max_mean_return_epoch = self.epoch + 1
+                 self.max_mean_return = float('-inf')
+            elif epoch_mean_return > self.max_mean_return:
+                 self.max_mean_return = epoch_mean_return
+                 self.max_mean_return_epoch = self.epoch
 
-            lesson_timeout = self.epoch - max_mean_return_epoch
+            lesson_timeout = self.epoch - self.max_mean_return_epoch
             self.own_stats[self.LESSON_TIMEOUT] = min((self.lesson_timeout_episodes - lesson_timeout) / self.lesson_timeout_episodes, 1.0)
             if lesson_timeout > self.lesson_timeout_episodes or (self.experience.success_rate() > 0.99 and lesson_timeout > 30):
-                 self.lesson += 1
-                 self.lesson_start_epoch = self.epoch + 1
-                 self.policy_updater.remaining_vf_only_updates = self.new_lesson_vf_only_updates
-                 self.policy_updater._set_lr_factor(1.0)
-                 max_mean_return = float('-inf')
-                 max_mean_return_epoch = self.epoch + 1
-                 self.own_stats[self.LESSON] = self.lesson
-                 self.save_checkpoint(f"lesson {self.lesson}.pt")
+                self.start_lesson(self.lesson + 1)
 
-                 has_more_lessons = self.env_manager.set_lesson(self.lesson)
-                 if has_more_lessons:
-                     print(f"******> Starting lesson {self.lesson}")
-                 else:
-                     print(f"Training completed")
-                     return
+    def start_lesson(self, lesson: int):
+        self.lesson = lesson
+        self.lesson_start_epoch = self.epoch + 1
+        self.policy_updater.remaining_vf_only_updates = self.new_lesson_vf_only_updates
+        self.policy_updater._set_lr_factor(1.0)
+        self.max_mean_return = float('-inf')
+        self.max_mean_return_epoch = self.epoch + 1
+        self.own_stats[self.LESSON] = self.lesson
+        self.save_checkpoint(f"lesson {self.lesson}.pt")
+
+        has_more_lessons = self.env_manager.set_lesson(self.lesson)
+        if has_more_lessons:
+            print(f"******> Starting lesson {self.lesson}")
+        else:
+            print(f"Training completed")
+            return
 
     def run_epoch(self):
+        self.timig_stats.update({
+            self.ENV_TIME: 0.0,
+            self.DECISION_TIME: 0.0,
+            self.EXPERIENCE_TIME: 0.0,
+            self.UPDATE_TIME: 0.0,
+            self.EVAL_TIME: 0.0
+        })
+
         self.epoch += self.resume_epoch
         self.policy_updater.reset()
 
         # collect experience
-        experience_start_time = time.time()
         self._collect_experience()
-        self.experience_duration = time.time() - experience_start_time
 
         # train
         update_start_time = time.time()
         self.policy_updater.update()
-        self.update_duration = time.time() - update_start_time
+        self.timig_stats[self.UPDATE_TIME] = time.time() - update_start_time
 
         if (self.epoch > 0 and  self.epoch % self.save_freq == 0) or (self.epoch == self.epochs):
             self.save_checkpoint()
 
 
     def log_to_console(self):
+        eval_start_time = time.time()
+        if self.eval_func is not None:
+            plot = self.eval_func(self.epoch, self.lesson, self.policy_updater)
+            if plot:
+                wandb.log({"chart": plot})
+                plot.close()
+        self.timig_stats[self.EVAL_TIME] = time.time() - eval_start_time
+
         log_str = ""
         for _, stats in self.all_stats.items():
             for name, value in stats.items():
@@ -131,41 +161,45 @@ class Trainer:
                 else:
                     log_str += f"{name}: {value}; "
 
-        eval_start_time = time.time()
-        if self.eval_func is not None:
-            plot = self.eval_func(self.epoch, self.lesson, self.policy_updater)
-            if plot:
-                wandb.log({"chart": plot})
-                plot.close()
-        eval_duration = time.time() - eval_start_time
-
-        print(f"Epoch: {self.epoch:3}; L: {self.lesson}; {log_str} Exp time: {self.experience_duration:.1f}; Update time: {self.update_duration:.1f}; Eval time: {eval_duration:.1f}")
+        print(f"Epoch: {self.epoch:3}; L: {self.lesson}; {log_str}")
 
 
     def _collect_experience(self):
+        env_time = time.time()
         self.experience.reset()
+        self.timig_stats[self.ENV_TIME] += time.time() - env_time
+
         action_mean_entropy = torch.empty(self.experience.buffer_size, self.experience.num_envs, dtype=torch.float32)
         self.policy.requires_grad_(False)
         self.policy_updater.value_net_tail.requires_grad_(False)
         try:
             obs = torch.as_tensor(self.env_manager.reset(), **self.cfg.tensor_args)
             for step, _ in enumerate(range(self.experience.buffer_size)):
+                decision_time = time.time()
                 encoded_obs = self.policy.obs_encoder(obs)
                 act_dist = self.policy.action_dist(encoded_obs = encoded_obs)
                 act = act_dist.sample()
                 action_mean_entropy[step, :] = act_dist.entropy().mean(-1)
+                self.timig_stats[self.DECISION_TIME] += time.time() - decision_time
+
+                env_time = time.time()
                 next_obs, rew, done, success = self.env_manager.step(act)
                 next_obs = torch.as_tensor(next_obs, **self.cfg.tensor_args)
+                self.timig_stats[self.ENV_TIME] += time.time() - env_time
 
+                experience_time = time.time()
                 self.experience.step(obs, act, rew)
                 self.policy_updater.end_episode(done)
                 self.experience.end_episode(done, success)
+                self.timig_stats[self.EXPERIENCE_TIME] += time.time() - experience_time
                 obs = next_obs
 
+            experience_time = time.time()
             encoded_obs = self.policy.obs_encoder(obs)
             last_obs_value_estimate = self.policy_updater.value_estimate(encoded_obs = encoded_obs).cpu().numpy()
             self.experience.buffer_full(last_obs_value_estimate)
             self.policy_updater.buffer_full(last_obs_value_estimate)
+            self.timig_stats[self.EXPERIENCE_TIME] += time.time() - experience_time
 
             self.own_stats[self.ENTROPY] = action_mean_entropy.mean().item()
 
@@ -199,10 +233,14 @@ class Trainer:
         trainer_state = checkpoint["trainer"]
         self.resume_epoch = trainer_state.get(self.EPOCH, 0)+1
 
-        self.lesson = trainer_state.get(self.LESSON, 0)
-        self.lesson_start_epoch = trainer_state.get(self.LESSON_START_EPOCH, 0)
-        self.env_manager.set_lesson(self.lesson)
-        self.own_stats[self.LESSON] = self.lesson
+        if not self.resume_lesson:
+            self.lesson = trainer_state.get(self.LESSON, 0)
+            self.lesson_start_epoch = trainer_state.get(self.LESSON_START_EPOCH, 0)
+            self.env_manager.set_lesson(self.lesson)
+            self.own_stats[self.LESSON] = self.lesson
+        else:
+            self.start_lesson(self.resume_lesson)
+
 
     def checkpoint(self):
         state_dict = {

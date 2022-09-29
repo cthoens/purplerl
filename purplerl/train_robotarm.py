@@ -96,7 +96,7 @@ class RobotArmEnvManager(EnvManager):
         self.action_space = Box(float("-inf"), float("inf"), (5, ))
 
         self.set_lesson(0)
-        self.config_channel.set_configuration_parameters(time_scale=20, target_frame_rate=2, capture_frame_rate=2)
+        self.config_channel.set_configuration_parameters(time_scale=10, target_frame_rate=10, capture_frame_rate=10)
 
     def reset(self):
         self.env.reset()
@@ -135,7 +135,7 @@ class RobotArmEnvManager(EnvManager):
 
 
     def set_lesson(self, lesson):
-        if lesson > 3:
+        if lesson > 8:
             return False;
 
         self.params_channel.set_float_parameter("lessonIndex", lesson)
@@ -238,7 +238,7 @@ class RobotArmObsEncoder(torch.nn.Module):
         return torch.concat((enc_training, enc_goal, joint_pos, remaining), -1)
 
 
-def run(dev_mode = False):
+def run(dev_mode:bool = False, resume_lesson: int = None):
     phase_config = {
         "phase1": {
             "new_lesson_vf_only_updates": 8,
@@ -256,7 +256,8 @@ def run(dev_mode = False):
 
             "update_batch_size": 75,
             "update_batch_count": 2,
-            "epochs": 1000
+            "epochs": 1000,
+            "resume_lesson": resume_lesson,
         }
     }
     active_phase = "phase1"
@@ -287,7 +288,8 @@ def create_trainer(
     new_lesson_vf_only_updates: int = 0,
     update_batch_size: int = 29,
     update_batch_count: int = 2,
-    epochs: int = 3000
+    epochs: int = 3000,
+    resume_lesson: int = None,
 ):
     buffer_size = update_batch_size * update_batch_count
 
@@ -334,7 +336,7 @@ def create_trainer(
         clip_ratio = clip_ratio,
         target_kl = target_kl,
         target_vf_delta = target_vf_delta,
-        lr_decay = lr_decay
+        lr_decay = lr_decay,
     )
     wandb.watch((policy, policy_updater.value_net_tail), log='all', log_freq=20)
 
@@ -350,6 +352,7 @@ def create_trainer(
         epochs = epochs,
         save_freq = save_freq,
         output_dir= out_dir,
+        resume_lesson = resume_lesson,
         #eval_func =
     )
 
@@ -373,6 +376,7 @@ if __name__ == '__main__':
     import argparse
     parser = argparse.ArgumentParser()
     parser.add_argument('--dev', action='store_true')
+    parser.add_argument('--lesson', type=int, default=None)
     args = parser.parse_args()
 
     seed = 45632
@@ -383,4 +387,4 @@ if __name__ == '__main__':
     import matplotlib
     matplotlib.use('Agg')
 
-    run(args.dev)
+    run(args.dev, args.lesson)
