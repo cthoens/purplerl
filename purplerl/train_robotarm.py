@@ -257,7 +257,7 @@ def run(dev_mode:bool = False, resume_lesson: int = None):
             "lr_decay": 0.98,
             "action_scaling": 2.0,
 
-            "update_batch_size": 100,
+            "update_batch_size": 90,
             "update_batch_count": 2,
             "epochs": 4000,
             "resume_lesson": resume_lesson,
