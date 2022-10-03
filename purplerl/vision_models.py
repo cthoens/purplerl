@@ -118,8 +118,8 @@ def half_unet_v1(input_resolution, in_channels=1):
             Flatten(),
             Linear(np.prod(resolution)*64, 128),
             ReLU(inplace=True),
-            Linear(128, 128),
+            Linear(128, 96),
             ReLU(inplace=True),
-            Linear(128, 128),
+            Linear(96, 64),
             ReLU(inplace=True),
         )

@@ -233,7 +233,7 @@ class Trainer:
         trainer_state = checkpoint["trainer"]
         self.resume_epoch = trainer_state.get(self.EPOCH, 0)+1
 
-        if not self.resume_lesson:
+        if self.resume_lesson is None:
             self.lesson = trainer_state.get(self.LESSON, 0)
             self.lesson_start_epoch = trainer_state.get(self.LESSON_START_EPOCH, 0)
             self.env_manager.set_lesson(self.lesson)

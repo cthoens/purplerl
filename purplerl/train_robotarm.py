@@ -16,9 +16,9 @@ from gym.spaces import Box
 from purplerl.experience_buffer import ExperienceBuffer
 from purplerl.trainer import Trainer
 from purplerl.environment import EnvManager
-from purplerl.policy import ContinuousPolicy, PPO
+from purplerl.policy import ContinuousPolicy, PPO, mlp
 from purplerl.config import GpuConfig
-from purplerl.vision_models import half_unet_v1
+from purplerl.resnet import resnet18
 
 cfg = GpuConfig()
 
@@ -135,9 +135,6 @@ class RobotArmEnvManager(EnvManager):
 
 
     def set_lesson(self, lesson):
-        if lesson > 8:
-            return False;
-
         self.params_channel.set_float_parameter("lessonIndex", lesson)
         return True
 
@@ -208,9 +205,12 @@ class RobotArmObsEncoder(torch.nn.Module):
 
         self.env = env
 
-        self.cnn_layers = half_unet_v1(np.array(list(env.training_sensor_space.shape[1:]), np.int32))
+        #self.cnn_layers = half_unet_v1(np.array(list(env.training_sensor_space.shape[1:]), np.int32))
+        self.cnn_layers = resnet18(num_classes=64)
+        self.mlp = mlp([134, 64, 64, 64, 134], activation=torch.nn.ReLU, output_activation=torch.nn.Identity)
+        self.relu = torch.nn.ReLU(inplace=True)
 
-        self.shape: tuple[int, ...] = (128 + 128 + 5 + 1, )
+        self.shape: tuple[int, ...] = (134, )
 
     def forward(self, obs: torch.tensor):
         # Note: obs can be of shape (num_envs, obs_shape) or (num_envs, buffer_size, obs_shape)
@@ -218,9 +218,12 @@ class RobotArmObsEncoder(torch.nn.Module):
         obs = obs.reshape((-1, obs.shape[-1], ))
 
         enc_obs = self._forward(obs)
+        out = self.mlp(enc_obs)
+        out += enc_obs
+        out = self.relu(out)
 
         # restore the buffer dimension
-        return enc_obs.reshape(buffer_dims + (-1, ))
+        return out.reshape(buffer_dims + (-1, ))
 
 
     def _forward(self, obs: torch.tensor):
@@ -243,20 +246,20 @@ def run(dev_mode:bool = False, resume_lesson: int = None):
         "phase1": {
             "new_lesson_vf_only_updates": 8,
             "lesson_timeout_episodes": 80,
-            "policy_lr": 2e-4,
-            "vf_lr": 2e-4,
+            "policy_lr": 5e-5,
+            "vf_lr": 5e-5,
             "update_epochs" : 7,
             "discount": 0.95,
             "adv_lambda": 0.95,
             "clip_ratio": 0.10,
             "target_kl": 0.02,
             "target_vf_delta": 1.0,
-            "lr_decay": 0.90,
+            "lr_decay": 0.98,
             "action_scaling": 2.0,
 
-            "update_batch_size": 75,
+            "update_batch_size": 100,
             "update_batch_count": 2,
-            "epochs": 1000,
+            "epochs": 4000,
             "resume_lesson": resume_lesson,
         }
     }
