@@ -188,6 +188,8 @@ class Trainer:
                 self.timig_stats[self.ENV_TIME] += time.time() - env_time
 
                 experience_time = time.time()
+                # Note: Always call pocliy_updater first so it can use experience.next_step_index
+                self.policy_updater.step(encoded_obs)
                 self.experience.step(obs, act, rew)
                 self.policy_updater.end_episode(done)
                 self.experience.end_episode(done, success)

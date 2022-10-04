@@ -206,11 +206,12 @@ class RobotArmObsEncoder(torch.nn.Module):
         self.env = env
 
         #self.cnn_layers = half_unet_v1(np.array(list(env.training_sensor_space.shape[1:]), np.int32))
-        self.cnn_layers = resnet18(num_classes=64)
-        self.mlp = mlp([134, 64, 64, 64, 134], activation=torch.nn.ReLU, output_activation=torch.nn.Identity)
+        self.cnn_layers = resnet18(num_classes=32)
+        self.mlp = mlp([70, 64, 64, 64, 70], activation=torch.nn.ReLU, output_activation=torch.nn.Identity)
         self.relu = torch.nn.ReLU(inplace=True)
+        self.relu2 = torch.nn.ReLU(inplace=True)
 
-        self.shape: tuple[int, ...] = (134, )
+        self.shape: tuple[int, ...] = (70, )
 
     def forward(self, obs: torch.tensor):
         # Note: obs can be of shape (num_envs, obs_shape) or (num_envs, buffer_size, obs_shape)
@@ -218,7 +219,8 @@ class RobotArmObsEncoder(torch.nn.Module):
         obs = obs.reshape((-1, obs.shape[-1], ))
 
         enc_obs = self._forward(obs)
-        out = self.mlp(enc_obs)
+        enc_obs_relu = self.relu(enc_obs)
+        out = self.mlp(enc_obs_relu)
         out += enc_obs
         out = self.relu(out)
 
@@ -244,20 +246,20 @@ class RobotArmObsEncoder(torch.nn.Module):
 def run(dev_mode:bool = False, resume_lesson: int = None):
     phase_config = {
         "phase1": {
-            "new_lesson_vf_only_updates": 8,
+            "new_lesson_vf_only_updates": 0,
             "lesson_timeout_episodes": 80,
             "policy_lr": 5e-5,
             "vf_lr": 5e-5,
-            "update_epochs" : 7,
+            "update_epochs" : 5,
             "discount": 0.95,
             "adv_lambda": 0.95,
-            "clip_ratio": 0.10,
+            "clip_ratio": 0.01,
             "target_kl": 0.02,
             "target_vf_delta": 1.0,
-            "lr_decay": 0.98,
+            "lr_decay": 0.90,
             "action_scaling": 2.0,
 
-            "update_batch_size": 90,
+            "update_batch_size": 75,
             "update_batch_count": 2,
             "epochs": 4000,
             "resume_lesson": resume_lesson,

@@ -13,6 +13,7 @@ from torch.utils.data import TensorDataset, DataLoader
 from torch.optim import Adam
 
 from purplerl.experience_buffer import ExperienceBuffer, discount_cumsum
+import purplerl.config as config
 
 
 def mlp(sizes, activation=nn.ReLU, output_activation=nn.Identity):
@@ -208,6 +209,9 @@ class PPO():
             {'params': self.value_net_tail.parameters(), 'lr': self.initial_vf_lr}
         ])
 
+
+        # The extra slot at the end of used in _finish_env_path()
+        self.value = torch.zeros(experience.buffer_size+1, experience.num_envs, dtype=config.dtype)
         self.logp_old = torch.zeros(experience.buffer_size, experience.num_envs, **experience.tensor_args)
         self.weight = torch.zeros(experience.buffer_size, experience.num_envs, **experience.tensor_args)
 
@@ -216,6 +220,10 @@ class PPO():
         self.weight_loader = DataLoader(TensorDataset(self.weight), batch_size=self.update_batch_size, pin_memory=cfg.pin)
         self.discounted_reward_loader = DataLoader(TensorDataset(self.experience.discounted_reward), batch_size=self.update_batch_size, pin_memory=cfg.pin)
         self.logp_old_loader = DataLoader(TensorDataset(self.logp_old), batch_size=self.update_batch_size, pin_memory=cfg.pin)
+
+
+    def step(self, encoded_obs):
+        self.value[self.experience.next_step_index] = self.value_net_tail(encoded_obs).squeeze(-1).cpu()
 
 
     def buffer_full(self, last_state_value_estimate: torch.tensor):
@@ -501,13 +509,10 @@ class PPO():
     def _finish_env_path(self, env_idx, last_state_value_estimate: float = None):
         reached_terminal_state = last_state_value_estimate is None
         path_slice = range(self.experience.ep_start_index[env_idx], self.experience.next_step_index)
+        path_slice_plus_one = range(self.experience.ep_start_index[env_idx], self.experience.next_step_index+1)
         rews = self.experience.step_reward[path_slice, env_idx]
 
-        obs_device = self.experience.obs[path_slice, env_idx].to(self.cfg.device)
-
-        vals = np.zeros(len(path_slice)+1, dtype=np.float32)
-        # TODO: Don't encode obs again here
-        vals[:-1] = self.value_net_tail(self.policy.obs_encoder(obs_device)).squeeze(-1).cpu().numpy()
+        vals = self.value[path_slice_plus_one, env_idx].numpy()
         vals[-1] = last_state_value_estimate if not reached_terminal_state else 0.0
 
         # estimated reward for state transition = estimated value of next state - estimated value of current state
