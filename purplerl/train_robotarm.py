@@ -206,12 +206,12 @@ class RobotArmObsEncoder(torch.nn.Module):
         self.env = env
 
         #self.cnn_layers = half_unet_v1(np.array(list(env.training_sensor_space.shape[1:]), np.int32))
-        self.cnn_layers = resnet18(num_classes=32)
-        self.mlp = mlp([70, 64, 64, 64, 70], activation=torch.nn.ReLU, output_activation=torch.nn.Identity)
+        self.cnn_layers = resnet18(num_classes=64)
+        self.mlp = mlp([134, 64, 64, 64, 134], activation=torch.nn.ReLU, output_activation=torch.nn.Identity)
         self.relu = torch.nn.ReLU(inplace=True)
         self.relu2 = torch.nn.ReLU(inplace=True)
 
-        self.shape: tuple[int, ...] = (70, )
+        self.shape: tuple[int, ...] = (134, )
 
     def forward(self, obs: torch.tensor):
         # Note: obs can be of shape (num_envs, obs_shape) or (num_envs, buffer_size, obs_shape)
