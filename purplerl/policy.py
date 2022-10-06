@@ -19,7 +19,7 @@ import purplerl.config as config
 def mlp(sizes, activation=nn.ReLU, output_activation=nn.Identity):
     layers = []
     for j in range(len(sizes)-1):
-        layers += [nn.Linear(sizes[j], sizes[j+1], False)]
+        layers += [nn.Linear(sizes[j], sizes[j+1], bias = True)]
         layers += [activation() if j < len(sizes)-2 else output_activation()]
 
     return nn.Sequential(*layers)
@@ -90,8 +90,7 @@ class ContinuousPolicy(StochasticPolicy):
     def __init__(self,
         obs_encoder: torch.nn.Module,
         action_space: list[int],
-        hidden_sizes: list[int],
-        output_activation  = nn.Identity,
+        action_dist_net_tail: list[int],
         mean_offset: torch.tensor = None,
         min_std: torch.tensor = None,
         max_std: torch.tensor = None,
@@ -104,8 +103,7 @@ class ContinuousPolicy(StochasticPolicy):
         self.std_scale = std_scale
         self.min_std = min_std if min_std is not None else torch.zeros(*self.action_shape)
         self.max_std = max_std if max_std is not None else torch.full(float("inf"), *self.action_shape)
-        mlp_sizes = list(obs_encoder.shape) + hidden_sizes + [np.prod(np.array(self.action_dist_net_output_shape))]
-        self.action_dist_net_tail = mlp(sizes=mlp_sizes, output_activation=output_activation)
+        self.action_dist_net_tail = action_dist_net_tail
         self.action_dist_net = nn.Sequential(
             self.obs_encoder,
             self.action_dist_net_tail
@@ -157,6 +155,7 @@ class PPO():
     UPDATE_BALANCE = "Update Balance"
     CLIP_FACTOR = "Clip Factor"
     VALUE_LOSS = "VF Loss"
+    VALUE_LOSS_FACTOR = "VF Loss Factor"
     LR_FACTOR = "LR Factor"
     BACKTRACK_POLICY = "Backtrack Policy"
     BACKTRACK_VF = "Backtrack VF"
@@ -170,7 +169,7 @@ class PPO():
         cfg: dict,
         policy: ContinuousPolicy,
         experience: ExperienceBuffer,
-        hidden_sizes: list,
+        value_net_tail: torch.nn.Module,
         policy_lr: float,
         vf_lr: float,
         update_batch_size: int,
@@ -201,7 +200,7 @@ class PPO():
         self.remaining_vf_only_updates = vf_only_updates
         self.stats = {}
 
-        self.value_net_tail = mlp(list(policy.obs_encoder.shape) + hidden_sizes + [1]).to(cfg.device)
+        self.value_net_tail = value_net_tail
 
         self.optimizer = Adam([
             {'params': self.policy.obs_encoder.parameters(), 'lr': max(self.initial_vf_lr, self.initial_policy_lr)},
@@ -345,7 +344,10 @@ class PPO():
                 # Backward pass
                 # -------------
 
-                loss = batch_policy_loss + batch_value_loss  + self.entropy_factor * entropy.mean()
+                vf_loss_factor = torch.abs(batch_policy_loss.detach() / batch_value_loss.detach())
+                vf_loss_factor = torch.clamp(vf_loss_factor, 0.25, 4.0)
+
+                loss = batch_policy_loss + vf_loss_factor * batch_value_loss  + self.entropy_factor * entropy.mean()
                 if not is_validate_epoch:
                     loss.backward()
 
@@ -353,8 +355,8 @@ class PPO():
                 del batch_value_loss
                 del entropy
                 del loss
-
             # end for: iterate through dataset batches
+            self.stats[self.VALUE_LOSS_FACTOR] = vf_loss_factor.item()
 
             # whether to roll back policy and vf to state before last update
             backtrack = False

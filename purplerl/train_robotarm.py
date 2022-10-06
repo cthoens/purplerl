@@ -22,6 +22,8 @@ from purplerl.resnet import resnet18
 
 cfg = GpuConfig()
 
+split_outputs = False
+
 class RobotArmEnvManager(EnvManager):
     def __init__(self, file_name, action_scaling = 2.0, *, port_ = 6064, seed = 0, timeout_wait = 120):
         self.action_scaling = action_scaling
@@ -181,22 +183,18 @@ class RobotArmEnvManager(EnvManager):
 
 
     def _goal_obs(self, obs: torch.tensor):
-        # TODO
         return obs[:, self.goal_range].reshape(*([-1] + list(self.goal_sensor_space.shape)))
 
 
     def _joint_angles(self, obs: torch.tensor):
-        # TODO
         return obs[:, self.joint_pos_range].reshape(*([-1] + list(self.joint_angels_space.shape)))
 
 
     #def _goal_angles(self, obs: torch.tensor):
-    #    # TODO
     #    return obs[:, self.goal_angles_range].reshape(*([-1] + list(self.goal_angels_space.shape)))
 
 
     def _remaining(self, obs: torch.tensor):
-        # TODO
         return obs[:, self.remaining_range].reshape(*([-1] + list(self.remaining_space.shape)))
 
 class RobotArmObsEncoder(torch.nn.Module):
@@ -204,14 +202,27 @@ class RobotArmObsEncoder(torch.nn.Module):
         super().__init__()
 
         self.env = env
+        self.num_obs_outputs = 64
+        self.num_conv_net_outputs = 2 * self.num_obs_outputs + np.prod(env.joint_angels_space.shape) + np.prod(env.remaining_space.shape)
+
+        self.training_range = range(0, self.num_obs_outputs)
+        self.goal_range = range(self.training_range.stop, self.training_range.stop + self.num_obs_outputs)
+        self.joint_pos_range = range(self.goal_range.stop, self.goal_range.stop + np.prod(env.joint_angels_space.shape))
+        self.remaining_range = range(self.joint_pos_range.stop, self.joint_pos_range.stop + np.prod(env.remaining_space.shape))
 
         #self.cnn_layers = half_unet_v1(np.array(list(env.training_sensor_space.shape[1:]), np.int32))
-        self.cnn_layers = resnet18(num_classes=64)
-        self.mlp = mlp([134, 64, 64, 64, 134], activation=torch.nn.ReLU, output_activation=torch.nn.Identity)
-        self.relu = torch.nn.ReLU(inplace=True)
-        self.relu2 = torch.nn.ReLU(inplace=True)
+        self.cnn_layers = resnet18(num_classes=self.num_obs_outputs)
+        self.mlp = mlp([self.num_conv_net_outputs, 64, 64, 64, self.num_obs_outputs], activation=torch.nn.ReLU, output_activation=torch.nn.Identity)
+        self.enc_obs_relu = torch.nn.ReLU(inplace=True)
+        self.skip_relu = torch.nn.ReLU(inplace=True)
 
-        self.shape: tuple[int, ...] = (134, )
+        if not split_outputs:
+            self.num_outputs = 2 * np.prod(env.action_space.shape) + np.prod(env.remaining_space.shape)
+            self.out_layer = torch.nn.Linear(self.num_obs_outputs, self.num_outputs)
+        else:
+            self.num_outputs = self.num_obs_outputs
+
+        self.shape: tuple[int, ...] = (self.num_outputs, )
 
     def forward(self, obs: torch.tensor):
         # Note: obs can be of shape (num_envs, obs_shape) or (num_envs, buffer_size, obs_shape)
@@ -219,10 +230,12 @@ class RobotArmObsEncoder(torch.nn.Module):
         obs = obs.reshape((-1, obs.shape[-1], ))
 
         enc_obs = self._forward(obs)
-        enc_obs_relu = self.relu(enc_obs)
-        out = self.mlp(enc_obs_relu)
-        out += enc_obs
-        out = self.relu(out)
+        enc_obs = self.enc_obs_relu(enc_obs)
+        out = self.mlp(enc_obs)
+        out += self._training_obs(enc_obs)
+        out = self.skip_relu(out)
+        if not split_outputs:
+            out = self.out_layer(out)
 
         # restore the buffer dimension
         return out.reshape(buffer_dims + (-1, ))
@@ -242,6 +255,25 @@ class RobotArmObsEncoder(torch.nn.Module):
 
         return torch.concat((enc_training, enc_goal, joint_pos, remaining), -1)
 
+    def _training_obs(self, obs: torch.tensor):
+        return obs[:, self.training_range]
+
+
+    def _goal_obs(self, obs: torch.tensor):
+        return obs[:, self.goal_range]
+
+
+    def _joint_angles(self, obs: torch.tensor):
+        return obs[:, self.joint_pos_range]
+
+
+    #def _goal_angles(self, obs: torch.tensor):
+    #    return obs[:, self.goal_angles_range]
+
+
+    def _remaining(self, obs: torch.tensor):
+        return obs[:, self.remaining_range]
+
 
 def run(dev_mode:bool = False, resume_lesson: int = None):
     phase_config = {
@@ -253,15 +285,15 @@ def run(dev_mode:bool = False, resume_lesson: int = None):
             "update_epochs" : 5,
             "discount": 0.95,
             "adv_lambda": 0.95,
-            "clip_ratio": 0.01,
+            "clip_ratio": 0.02,
             "target_kl": 0.02,
             "target_vf_delta": 1.0,
             "lr_decay": 0.90,
-            "action_scaling": 2.0,
+            "action_scaling": 4.0,
 
             "update_batch_size": 75,
             "update_batch_count": 2,
-            "epochs": 4000,
+            "epochs": 2000,
             "resume_lesson": resume_lesson,
         }
     }
@@ -306,10 +338,28 @@ def create_trainer(
     # TODO Tell wandb about it
     num_envs = env_manager.env_count
 
+    obs_encoder = RobotArmObsEncoder(env_manager)
+
+    action_dist_net_output_shape = np.array(env_manager.action_space.shape + (2, ))
+    if split_outputs:
+        mlp_sizes = list(obs_encoder.shape) + [64, np.prod(action_dist_net_output_shape)]
+        action_dist_net_tail = mlp(sizes=mlp_sizes)
+
+    else:
+        class ActionDistNetTail(torch.nn.Module):
+            def forward(self, enc_obs):
+                buffer_dims = enc_obs.shape[:-1]
+                enc_obs = enc_obs.reshape((-1, enc_obs.shape[-1], ))
+
+                out = enc_obs[:,:10].reshape((-1, np.prod(action_dist_net_output_shape)))
+
+                return out.reshape(buffer_dims + (-1, ))
+        action_dist_net_tail = ActionDistNetTail()
+
     policy= ContinuousPolicy(
-        obs_encoder = RobotArmObsEncoder(env_manager),
+        obs_encoder = obs_encoder,
         action_space = env_manager.action_space,
-        hidden_sizes = [64],
+        action_dist_net_tail = action_dist_net_tail,
         std_scale = 0.5,
         min_std= torch.as_tensor([0.2, 0.2, 0.2, 0.2, 0.2]),
         max_std= torch.as_tensor([0.6, 0.6, 0.6, 0.6, 0.6])
@@ -327,11 +377,24 @@ def create_trainer(
         }
     )
 
+    if split_outputs:
+        value_net_tail = mlp(list(obs_encoder.shape) + [64, 1]).to(cfg.device)
+    else:
+        class ValueNetTail(torch.nn.Module):
+            def forward(self, enc_obs):
+                buffer_dims = enc_obs.shape[:-1]
+                enc_obs = enc_obs.reshape((-1, enc_obs.shape[-1], ))
+
+                out = enc_obs[:,-1]
+
+                return out.reshape(buffer_dims + (-1, ))
+        value_net_tail = ValueNetTail()
+
     policy_updater = PPO(
         cfg = cfg,
         policy = policy,
         experience = experience,
-        hidden_sizes = [64],
+        value_net_tail = value_net_tail,
         policy_lr = policy_lr,
         vf_lr = vf_lr,
         vf_only_updates = new_lesson_vf_only_updates,
