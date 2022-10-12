@@ -30,14 +30,10 @@ class WorkbenchObsEncoder(torch.nn.Module):
         self.shape: tuple[int, ...] = (128+1+2, )
 
     def forward(self, obs: torch.tensor):
-        # Note: obs can be of shape (num_envs, sheet_shape) or (num_envs, buffer_size, sheet_shape)
-        buffer_dims = list(obs.shape)[:-1]
         sheet_obs = obs[...,:-3]
         extra_obs = obs[...,-3:]
         # flatten buffer dimensions since the cnn only accepts 3D or 4D input
         x = self.cnn_layers(sheet_obs.reshape(-1, *env.SHEET_OBS_SPACE.shape))
-        # restore the buffer dimension
-        x = x.reshape(*(buffer_dims + [128]))
 
         return torch.concat((x, extra_obs), -1)
 

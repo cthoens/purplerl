@@ -18,6 +18,7 @@ from purplerl.policy import PPO
 
 class Trainer:
     EXPERIENCE = "Sample Trajectories"
+    ENVIRONMENT = "Env"
     POLICY = "Policy"
     TRAINER = "Trainer"
     TIMING = "Timing"
@@ -76,10 +77,15 @@ class Trainer:
             self.EVAL_TIME: 0.0
         }
         self.all_stats = {
+            self.ENVIRONMENT: self.env_manager.stats,
             self.EXPERIENCE: self.experience.stats,
             self.POLICY: self.policy_updater.stats,
             self.TRAINER: self.own_stats,
             self.TIMING: self.timig_stats
+        }
+        self.console_stats = {
+            self.EXPERIENCE: self.experience.stats,
+            self.POLICY: self.policy_updater.stats
         }
 
 
@@ -153,7 +159,7 @@ class Trainer:
         self.timig_stats[self.EVAL_TIME] = time.time() - eval_start_time
 
         log_str = ""
-        for _, stats in self.all_stats.items():
+        for _, stats in self.console_stats.items():
             for name, value in stats.items():
                 if type(value) == float:
                     log_str += f"{name}: {value:.4f}; "

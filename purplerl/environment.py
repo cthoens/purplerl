@@ -8,6 +8,10 @@ from purplerl.experience_buffer import ExperienceBuffer
 
 
 class EnvManager:
+
+    def __init__(self) -> None:
+        self.stats = {}
+
     def reset(self) -> list[np.ndarray]:
         """
         Resets all environments

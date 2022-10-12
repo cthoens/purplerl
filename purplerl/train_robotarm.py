@@ -26,6 +26,7 @@ split_outputs = False
 
 class RobotArmEnvManager(EnvManager):
     def __init__(self, file_name, action_scaling = 2.0, *, port_ = 6064, seed = 0, timeout_wait = 120):
+        super().__init__()
         self.action_scaling = action_scaling
 
         self.stats_channel = StatsSideChannel()
@@ -132,7 +133,17 @@ class RobotArmEnvManager(EnvManager):
 
 
     def update_obs_stats(self, experience:ExperienceBuffer):
-        pass
+        num_actions = np.prod(self.action_space.shape)
+
+        mean_joint_anges = self._joint_angles(experience.obs_merged).mean(-1)
+        std_joint_anges = self._joint_angles(experience.obs_merged).std(-1)
+
+        for i in range(num_actions):
+            self.stats[f"Joint {i} Mean"] = mean_joint_anges[i].item()
+            self.stats[f"Joint {i} Std"] = std_joint_anges[i].item()
+
+        mean_remaining = self._remaining(experience.obs_merged).mean()
+        self.stats[f"Mean Remaining"] = mean_remaining.item()
 
 
     def close(self):
@@ -351,12 +362,8 @@ def create_trainer(
     else:
         class ActionDistNetTail(torch.nn.Module):
             def forward(self, enc_obs):
-                buffer_dims = enc_obs.shape[:-1]
-                enc_obs = enc_obs.reshape((-1, enc_obs.shape[-1], ))
-
-                out = enc_obs[:,:10].reshape((-1, np.prod(action_dist_net_output_shape)))
-
-                return out.reshape(buffer_dims + (-1, ))
+                assert(enc_obs.shape[1]==11)
+                return enc_obs[:,:10].reshape((-1, np.prod(action_dist_net_output_shape)))
         action_dist_net_tail = ActionDistNetTail()
 
     policy= ContinuousPolicy(
@@ -385,12 +392,8 @@ def create_trainer(
     else:
         class ValueNetTail(torch.nn.Module):
             def forward(self, enc_obs):
-                buffer_dims = enc_obs.shape[:-1]
-                enc_obs = enc_obs.reshape((-1, enc_obs.shape[-1], ))
-
-                out = enc_obs[:,-1]
-
-                return out.reshape(buffer_dims + (-1, ))
+                assert(enc_obs.shape[1]==11)
+                return enc_obs[:,-1]
         value_net_tail = ValueNetTail()
 
     policy_updater = PPO(
