@@ -131,6 +131,10 @@ class RobotArmEnvManager(EnvManager):
         return obs, rew, done, success
 
 
+    def update_obs_stats(self, experience:ExperienceBuffer):
+        pass
+
+
     def close(self):
         self.env.close()
         self.env = None
@@ -158,8 +162,9 @@ class RobotArmEnvManager(EnvManager):
             assert(found[agent_id] == None)
             found[agent_id] == True
 
-            trainingObs[agent_id] = decision_steps.obs[self.trainingIdx][step_index]
-            goalObs[agent_id] = decision_steps.obs[self.goalIdx][step_index]
+            #Scale range from between 0.0 and 1.0 to -1.0 to 1.0
+            trainingObs[agent_id] = decision_steps.obs[self.trainingIdx][step_index] * 2.0 - 1.0
+            goalObs[agent_id] = decision_steps.obs[self.goalIdx][step_index] * 2.0 - 1.0
             jointPosObs[agent_id] = decision_steps.obs[self.jointPosIdx][step_index]
             #goalPosObs[agent_id] = decision_steps.obs[self.goalPosIdx][step_index]
             remainingObs[agent_id] = decision_steps.obs[self.remainingIdx][step_index]
@@ -225,10 +230,6 @@ class RobotArmObsEncoder(torch.nn.Module):
         self.shape: tuple[int, ...] = (self.num_outputs, )
 
     def forward(self, obs: torch.tensor):
-        # Note: obs can be of shape (num_envs, obs_shape) or (num_envs, buffer_size, obs_shape)
-        buffer_dims = obs.shape[:-1]
-        obs = obs.reshape((-1, obs.shape[-1], ))
-
         enc_obs = self._forward(obs)
         enc_obs = self.enc_obs_relu(enc_obs)
         out = self.mlp(enc_obs)
@@ -238,7 +239,7 @@ class RobotArmObsEncoder(torch.nn.Module):
             out = self.out_layer(out)
 
         # restore the buffer dimension
-        return out.reshape(buffer_dims + (-1, ))
+        return out
 
 
     def _forward(self, obs: torch.tensor):
@@ -364,7 +365,7 @@ def create_trainer(
         action_dist_net_tail = action_dist_net_tail,
         std_scale = 0.5,
         min_std= torch.as_tensor([0.2, 0.2, 0.2, 0.2, 0.2]),
-        max_std= torch.as_tensor([0.5, 0.5, 0.5, 0.5, 0.5])
+        max_std= torch.as_tensor([0.6, 0.6, 0.6, 0.6, 0.6])
     ).to(cfg.device)
 
     experience = ExperienceBuffer(

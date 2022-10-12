@@ -155,6 +155,7 @@ class PPO():
     UPDATE_BALANCE = "Update Balance"
     CLIP_FACTOR = "Clip Factor"
     VALUE_LOSS = "VF Loss"
+    VALUE_LOSS_IN = "VF Loss In"
     VALUE_LOSS_FACTOR = "VF Loss Factor"
     LR_FACTOR = "LR Factor"
     BACKTRACK_POLICY = "Backtrack Policy"
@@ -188,7 +189,7 @@ class PPO():
         self.initial_policy_lr = policy_lr
         self.initial_vf_lr = vf_lr
         self.update_epochs = update_epochs
-        self.update_batch_size = update_batch_size
+        self.update_batch_size = update_batch_size * experience.num_envs
         self.clip_ratio = clip_ratio
         self.target_kl = target_kl
         self.target_vf_delta = target_vf_delta
@@ -214,11 +215,14 @@ class PPO():
         self.logp_old = torch.zeros(experience.buffer_size, experience.num_envs, **experience.tensor_args)
         self.weight = torch.zeros(experience.buffer_size, experience.num_envs, **experience.tensor_args)
 
-        self.obs_loader = DataLoader(TensorDataset(self.experience.obs), batch_size=self.update_batch_size, pin_memory=cfg.pin)
-        self.action_loader = DataLoader(TensorDataset(self.experience.action), batch_size=self.update_batch_size, pin_memory=cfg.pin)
-        self.weight_loader = DataLoader(TensorDataset(self.weight), batch_size=self.update_batch_size, pin_memory=cfg.pin)
-        self.discounted_reward_loader = DataLoader(TensorDataset(self.experience.discounted_reward), batch_size=self.update_batch_size, pin_memory=cfg.pin)
-        self.logp_old_loader = DataLoader(TensorDataset(self.logp_old), batch_size=self.update_batch_size, pin_memory=cfg.pin)
+        self.logp_old_merged = self.logp_old.reshape(-1)
+        self.weight_merged = self.weight.reshape(-1)
+
+        self.obs_loader = DataLoader(TensorDataset(self.experience.obs_merged), batch_size=self.update_batch_size, pin_memory=cfg.pin)
+        self.action_loader = DataLoader(TensorDataset(self.experience.action_merged), batch_size=self.update_batch_size, pin_memory=cfg.pin)
+        self.discounted_reward_loader = DataLoader(TensorDataset(self.experience.discounted_reward_merged), batch_size=self.update_batch_size, pin_memory=cfg.pin)
+        self.weight_loader = DataLoader(TensorDataset(self.weight_merged), batch_size=self.update_batch_size, pin_memory=cfg.pin)
+        self.logp_old_loader = DataLoader(TensorDataset(self.logp_old_merged), batch_size=self.update_batch_size, pin_memory=cfg.pin)
 
 
     def step(self, encoded_obs):
@@ -297,7 +301,7 @@ class PPO():
                     # Calculate the pre-update log probs. This is done here to reuse the obs that are already encoded
                     with torch.no_grad():
                         logp_old = self.policy.action_dist(encoded_obs=encoded_obs).log_prob(act).sum(-1)
-                        self.logp_old[batch_range, ...] = logp_old.cpu()
+                        self.logp_old_merged[batch_range, ...] = logp_old.cpu()
                 else:
                     logp_old = logp_old[0].to(self.cfg.device)
 
@@ -345,7 +349,7 @@ class PPO():
                 # -------------
 
                 vf_loss_factor = torch.abs(batch_policy_loss.detach() / batch_value_loss.detach())
-                vf_loss_factor = torch.clamp(vf_loss_factor, 0.25, 4.0)
+                vf_loss_factor = torch.clamp(vf_loss_factor, 0.25, 4.0) * 2.0
 
                 loss = batch_policy_loss + vf_loss_factor * batch_value_loss  + self.entropy_factor * entropy.mean()
                 if not is_validate_epoch:
@@ -416,9 +420,10 @@ class PPO():
                 if clip_factor_count != 0:
                     self.stats[self.POLICY_LOSS] = policy_loss_total.item() / policy_loss_count.item()
                     self.stats[self.CLIP_FACTOR] = clip_factor_total.item() / clip_factor_count.item()
-            if not is_first_epoch:
                 self.stats[self.VF_EPOCHS] += 1
                 self.stats[self.VALUE_LOSS] = epoch_value_loss
+            else:
+                self.stats[self.VALUE_LOSS_IN] = epoch_value_loss
 
             if not is_validate_epoch:
                 cp = self._full_checkpoint()

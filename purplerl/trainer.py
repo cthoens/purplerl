@@ -168,7 +168,8 @@ class Trainer:
         self.experience.reset()
         self.timig_stats[self.ENV_TIME] += time.time() - env_time
 
-        action_mean_entropy = torch.empty(self.experience.buffer_size, self.experience.num_envs, dtype=torch.float32)
+        num_actions = np.prod(self.env_manager.action_space.shape)
+        action_mean_entropy = torch.empty(self.experience.buffer_size, self.experience.num_envs, num_actions, dtype=torch.float32)
         self.policy.requires_grad_(False)
         self.policy_updater.value_net_tail.requires_grad_(False)
         try:
@@ -178,7 +179,7 @@ class Trainer:
                 encoded_obs = self.policy.obs_encoder(obs)
                 act_dist = self.policy.action_dist(encoded_obs = encoded_obs)
                 act = act_dist.sample()
-                action_mean_entropy[step, :] = act_dist.entropy().mean(-1)
+                action_mean_entropy[step, ...] = act_dist.entropy()
                 self.timig_stats[self.DECISION_TIME] += time.time() - decision_time
 
                 env_time = time.time()
@@ -202,7 +203,14 @@ class Trainer:
             self.policy_updater.buffer_full(last_obs_value_estimate)
             self.timig_stats[self.EXPERIENCE_TIME] += time.time() - experience_time
 
+            self.env_manager.update_obs_stats(self.experience)
+
             self.own_stats[self.ENTROPY] = action_mean_entropy.mean().item()
+            for i in range(num_actions):
+                self.own_stats[f"Action-{i}"] = self.experience.action[...,i].mean().item()
+                self.own_stats[f"Act-Std-{i}"] = self.experience.action[...,i].std().item()
+                self.own_stats[f"Act-Max-{i}"] = torch.abs(self.experience.action[...,i]).max().item()
+                self.own_stats[f"{self.ENTROPY}-A{i}"] = action_mean_entropy[...,i].mean().item()
 
         finally:
             self.policy.requires_grad_(True)

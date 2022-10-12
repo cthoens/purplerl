@@ -70,6 +70,10 @@ class ExperienceBuffer:
         self.discounted_reward = torch.zeros(buffer_size, num_envs, **self.tensor_args)
         self.success = torch.zeros(buffer_size, num_envs, dtype=torch.bool)
 
+        self.obs_merged = self.obs.reshape(buffer_size * num_envs, *obs_shape)
+        self.action_merged = self.action.reshape(buffer_size * num_envs, *act_shape)
+        self.discounted_reward_merged = self.discounted_reward.reshape(-1)
+
     def step(self, obs: torch.Tensor, act: torch.Tensor, reward: torch.Tensor):
         # Update in episode data
         self.ep_cum_reward += reward

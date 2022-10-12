@@ -4,6 +4,8 @@ import torch.nn
 
 import gym
 
+from purplerl.experience_buffer import ExperienceBuffer
+
 
 class EnvManager:
     def reset(self) -> list[np.ndarray]:
@@ -32,6 +34,10 @@ class EnvManager:
 
         """
         raise NotImplemented
+
+
+    def update_obs_stats(self, experience:ExperienceBuffer):
+        pass
 
     def set_lesson(self, lesson):
         return False
