@@ -202,7 +202,7 @@ class RobotArmObsEncoder(torch.nn.Module):
         super().__init__()
 
         self.env = env
-        self.num_obs_outputs = 64
+        self.num_obs_outputs = 192
         self.num_conv_net_outputs = 2 * self.num_obs_outputs + np.prod(env.joint_angels_space.shape) + np.prod(env.remaining_space.shape)
 
         self.training_range = range(0, self.num_obs_outputs)
@@ -212,7 +212,7 @@ class RobotArmObsEncoder(torch.nn.Module):
 
         #self.cnn_layers = half_unet_v1(np.array(list(env.training_sensor_space.shape[1:]), np.int32))
         self.cnn_layers = resnet18(num_classes=self.num_obs_outputs)
-        self.mlp = mlp([self.num_conv_net_outputs, 64, 64, 64, self.num_obs_outputs], activation=torch.nn.ReLU, output_activation=torch.nn.Identity)
+        self.mlp = mlp([self.num_conv_net_outputs, 192, 192, self.num_obs_outputs], activation=torch.nn.ReLU, output_activation=torch.nn.Identity)
         self.enc_obs_relu = torch.nn.ReLU(inplace=True)
         self.skip_relu = torch.nn.ReLU(inplace=True)
 
@@ -285,14 +285,15 @@ def run(dev_mode:bool = False, resume_lesson: int = None):
             "update_epochs" : 5,
             "discount": 0.95,
             "adv_lambda": 0.95,
-            "clip_ratio": 0.02,
-            "target_kl": 0.02,
+            "clip_ratio": 0.01,
+            "target_kl": 0.03,
             "target_vf_delta": 1.0,
             "lr_decay": 0.90,
             "action_scaling": 4.0,
+            "entropy_factor": 0.1,
 
-            "update_batch_size": 75,
-            "update_batch_count": 2,
+            "update_batch_size": 90,
+            "update_batch_count": 1,
             "epochs": 2000,
             "resume_lesson": resume_lesson,
         }
@@ -320,6 +321,7 @@ def create_trainer(
     target_vf_delta: float = 1.0,
     lr_decay: float = 0.95,
     action_scaling: float = 2.0,
+    entropy_factor: float = 0.0,
 
     lesson_timeout_episodes: int = 80,
     new_lesson_vf_only_updates: int = 0,
@@ -362,7 +364,7 @@ def create_trainer(
         action_dist_net_tail = action_dist_net_tail,
         std_scale = 0.5,
         min_std= torch.as_tensor([0.2, 0.2, 0.2, 0.2, 0.2]),
-        max_std= torch.as_tensor([0.6, 0.6, 0.6, 0.6, 0.6])
+        max_std= torch.as_tensor([0.5, 0.5, 0.5, 0.5, 0.5])
     ).to(cfg.device)
 
     experience = ExperienceBuffer(
@@ -405,6 +407,7 @@ def create_trainer(
         target_kl = target_kl,
         target_vf_delta = target_vf_delta,
         lr_decay = lr_decay,
+        entropy_factor = entropy_factor,
     )
     wandb.watch((policy, policy_updater.value_net_tail), log='all', log_freq=20)
 
