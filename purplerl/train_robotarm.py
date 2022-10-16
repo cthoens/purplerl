@@ -305,7 +305,7 @@ def run(dev_mode:bool = False, resume_lesson: int = None):
             "entropy_factor": 0.1,
 
             "update_batch_size": 90,
-            "update_batch_count": 1,
+            "update_batch_count": 3,
             "epochs": 2000,
             "resume_lesson": resume_lesson,
         }
