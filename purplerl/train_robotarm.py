@@ -24,6 +24,88 @@ cfg = GpuConfig()
 
 split_outputs = False
 
+class MultiRobotArmEnvManager(EnvManager):
+    def __init__(self, file_name, num_replicas = 1, action_scaling = 2.0, *, port_ = 6064, seed = 0, timeout_wait = 120):
+        super().__init__()
+        self.envs = [
+            RobotArmEnvManager(file_name=file_name, action_scaling=action_scaling, port_= port_+i, seed=seed, timeout_wait=timeout_wait)
+                for i in range(num_replicas)
+        ]
+        self.env_count = self.envs[0].env_count * num_replicas
+
+        self.training_sensor_space = self.envs[0].training_sensor_space
+        self.goal_sensor_space = self.envs[0].goal_sensor_space
+        self.joint_angels_space = self.envs[0].joint_angels_space
+        self.remaining_space = self.envs[0].remaining_space
+
+        self.observation_space = self.envs[0].observation_space
+        self.action_space = self.envs[0].action_space
+
+        self._training_obs = self.envs[0]._training_obs
+        self._goal_obs = self.envs[0]._goal_obs
+        self._joint_angles = self.envs[0]._joint_angles
+        self._remaining = self.envs[0]._remaining
+
+    def reset(self):
+        obs = np.zeros((self.env_count, self.envs[0].obs_length), dtype= np.float32)
+
+        for env_idx, env in enumerate(self.envs):
+            env_range = range(env_idx * self.envs[0].env_count, (env_idx + 1) * self.envs[0].env_count)
+            env_obs = env._reset()
+
+        for env_idx, env in enumerate(self.envs):
+            env_range = range(env_idx * self.envs[0].env_count, (env_idx + 1) * self.envs[0].env_count)
+            env_obs = env._collect_reset_obs()
+            obs[env_range, ...] = env_obs
+
+        return obs
+
+    def step(self, act: np.ndarray):
+        obs = np.zeros((self.env_count, self.envs[0].obs_length), dtype= np.float32)
+        rew = np.zeros(self.env_count, dtype= np.float32)
+        done = np.zeros(self.env_count, dtype= np.bool8)
+        success = np.zeros(self.env_count, dtype= np.bool8)
+
+        for env_idx, env in enumerate(self.envs):
+            env_range = range(env_idx * self.envs[0].env_count, (env_idx + 1) * self.envs[0].env_count)
+            env._step(act[env_range])
+
+        for env_idx, env in enumerate(self.envs):
+            env_range = range(env_idx * self.envs[0].env_count, (env_idx + 1) * self.envs[0].env_count)
+            env_obs, env_rew, env_done, env_success = env._collect_step_obs()
+            obs[env_range, ...] = env_obs
+            rew[env_range, ...] = env_rew
+            done[env_range, ...] = env_done
+            success[env_range, ...] = env_success
+
+        return obs, rew, done, success
+
+
+    def update_obs_stats(self, experience:ExperienceBuffer):
+        num_actions = np.prod(self.action_space.shape)
+
+        mean_joint_anges = self.envs[0]._joint_angles(experience.obs_merged).mean(-1)
+        std_joint_anges = self.envs[0]._joint_angles(experience.obs_merged).std(-1)
+
+        for i in range(num_actions):
+            self.stats[f"Joint {i} Mean"] = mean_joint_anges[i].item()
+            self.stats[f"Joint {i} Std"] = std_joint_anges[i].item()
+
+        mean_remaining = self._remaining(experience.obs_merged).mean()
+        self.stats[f"Mean Remaining"] = mean_remaining.item()
+
+
+    def close(self):
+        for env in self.envs:
+            env.close()
+        self.envs = None
+
+
+    def set_lesson(self, lesson):
+        for env in self.envs:
+            env.set_lesson(lesson)
+
+
 class RobotArmEnvManager(EnvManager):
     def __init__(self, file_name, action_scaling = 2.0, *, port_ = 6064, seed = 0, timeout_wait = 120):
         super().__init__()
@@ -86,7 +168,7 @@ class RobotArmEnvManager(EnvManager):
         self.remaining_range = range(self.joint_pos_range.stop, self.joint_pos_range.stop + np.prod(self.remaining_space.shape))
         #self.goal_angles_range = range(self.remaining_range.stop, self.remaining_range.stop + np.prod(self.goal_angels_space.shape))
 
-        obs_length = (
+        self.obs_length = (
                 np.prod(np.array(self.training_sensor_space.shape)) +
                 np.prod(np.array(self.goal_sensor_space.shape)) +
                 np.prod(np.array(self.joint_angels_space.shape)) +
@@ -94,20 +176,34 @@ class RobotArmEnvManager(EnvManager):
                 #np.prod(np.array(self.goal_angels_space.shape))
             ).item()
 
-        self.observation_space = Box(float("-1"), float("1"), (obs_length, ))
+        self.observation_space = Box(float("-1"), float("1"), (self.obs_length, ))
 
         self.action_space = Box(float("-inf"), float("inf"), (5, ))
 
         self.set_lesson(0)
         self.config_channel.set_configuration_parameters(time_scale=10, target_frame_rate=10, capture_frame_rate=10)
 
+
     def reset(self):
+        self.env._reset()
+        return self._collect_reset_obs()
+
+
+    def _reset(self):
         self.env.reset()
 
+
+    def _collect_reset_obs(self):
         obs, _ = self._get_obs()
         return obs
 
+
     def step(self, act: np.ndarray):
+        self._step(act)
+        return self._collect_step_obs()
+
+
+    def _step(self, act: np.ndarray):
         act = act.cpu().numpy()
 
         decision_steps, terminal_steps = self.env.get_steps(self.behavior_name)
@@ -119,6 +215,8 @@ class RobotArmEnvManager(EnvManager):
             self.env.set_action_for_agent(self.behavior_name, agent_id, action_tuple)
         self.env.step()
 
+
+    def _collect_step_obs(self):
         # Read the observations, rewards and terminated state of the environments
         obs, rew = self._get_obs()
         _, terminal_steps = self.env.get_steps(self.behavior_name)
@@ -304,7 +402,7 @@ def run(dev_mode:bool = False, resume_lesson: int = None):
             "action_scaling": 4.0,
             "entropy_factor": 0.1,
 
-            "update_batch_size": 90,
+            "update_batch_size": 45,
             "update_batch_count": 3,
             "epochs": 2000,
             "resume_lesson": resume_lesson,
@@ -347,7 +445,7 @@ def create_trainer(
     save_freq = 50
 
     file_name = "/home/cthoens/code/UnityRL/ml-agents-robots/Builds/RobotArm.x86_64"
-    env_manager= RobotArmEnvManager(file_name, action_scaling = action_scaling)
+    env_manager= MultiRobotArmEnvManager(file_name, num_replicas=2, action_scaling = action_scaling)
 
     # TODO Tell wandb about it
     num_envs = env_manager.env_count
