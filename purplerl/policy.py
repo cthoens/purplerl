@@ -349,7 +349,7 @@ class PPO():
                 # -------------
 
                 vf_loss_factor = torch.abs(batch_policy_loss.detach() / batch_value_loss.detach())
-                vf_loss_factor = torch.clamp(vf_loss_factor, 0.25, 4.0) * 2.0 * 10.0
+                vf_loss_factor = torch.clamp(vf_loss_factor, 0.33, 3.0) * 1.0 * 10.0
 
                 loss = batch_policy_loss + vf_loss_factor * batch_value_loss  + self.entropy_factor * entropy.mean()
                 if not is_validate_epoch:

@@ -59,8 +59,9 @@ class RobotArmEnvManager(EnvManager):
                 self.trainingSpec = spec
                 self.trainingIdx = idx
             elif spec.name == "JointAngels":
-                self.jointPosSpec = spec
-                self.jointPosIdx = idx
+                pass
+            #    self.jointPosSpec = spec
+            #    self.jointPosIdx = idx
             #elif spec.name == "GoalAngels":
             #    self.goalPosSpec = spec
             #    self.goalPosIdx = idx
@@ -70,26 +71,26 @@ class RobotArmEnvManager(EnvManager):
             else:
                 raise Exception(f"Unknown spec: {spec.name}")
 
-        assert(self.goalSpec and self.trainingSpec and self.jointPosSpec and self.remainigSpec) #and self.goalPosSpec
+        assert(self.goalSpec and self.trainingSpec and self.remainigSpec) #and self.jointPosSpec and self.goalPosSpec
 
         # TODO: Fix channels
         # Channels are the last dimension, but torch needs them to be the first dimension
         self.training_sensor_space = Box(float("-inf"), float("inf"), (1, ) + self.trainingSpec.shape[:-1])
         self.goal_sensor_space = Box(float("-inf"), float("inf"), (1, ) + self.goalSpec.shape[:-1])
-        self.joint_angels_space = Box(float("-inf"), float("inf"), self.jointPosSpec.shape)
+        #self.joint_angels_space = Box(float("-inf"), float("inf"), self.jointPosSpec.shape)
         self.remaining_space = Box(float("-inf"), float("inf"), self.remainigSpec.shape)
         #self.goal_angels_space = Box(float("-inf"), float("inf"), self.goalPosSpec.shape)
 
         self.training_range = range(0, np.prod(self.training_sensor_space.shape))
         self.goal_range = range(self.training_range.stop, self.training_range.stop + np.prod(self.goal_sensor_space.shape))
-        self.joint_pos_range = range(self.goal_range.stop, self.goal_range.stop + np.prod(self.joint_angels_space.shape))
-        self.remaining_range = range(self.joint_pos_range.stop, self.joint_pos_range.stop + np.prod(self.remaining_space.shape))
+        #self.joint_pos_range = range(self.goal_range.stop, self.goal_range.stop + np.prod(self.joint_angels_space.shape))
+        self.remaining_range = range(self.goal_range.stop, self.goal_range.stop + np.prod(self.remaining_space.shape))
         #self.goal_angles_range = range(self.remaining_range.stop, self.remaining_range.stop + np.prod(self.goal_angels_space.shape))
 
         obs_length = (
                 np.prod(np.array(self.training_sensor_space.shape)) +
                 np.prod(np.array(self.goal_sensor_space.shape)) +
-                np.prod(np.array(self.joint_angels_space.shape)) +
+                #np.prod(np.array(self.joint_angels_space.shape)) +
                 np.prod(np.array(self.remaining_space.shape))
                 #np.prod(np.array(self.goal_angels_space.shape))
             ).item()
@@ -133,14 +134,14 @@ class RobotArmEnvManager(EnvManager):
 
 
     def update_obs_stats(self, experience:ExperienceBuffer):
-        num_actions = np.prod(self.action_space.shape)
+        #num_actions = np.prod(self.action_space.shape)
 
-        mean_joint_anges = self._joint_angles(experience.obs_merged).mean(-1)
-        std_joint_anges = self._joint_angles(experience.obs_merged).std(-1)
+        #mean_joint_anges = self._joint_angles(experience.obs_merged).mean(-1)
+        #std_joint_anges = self._joint_angles(experience.obs_merged).std(-1)
 
-        for i in range(num_actions):
-            self.stats[f"Joint {i} Mean"] = mean_joint_anges[i].item()
-            self.stats[f"Joint {i} Std"] = std_joint_anges[i].item()
+        #for i in range(num_actions):
+        #    self.stats[f"Joint {i} Mean"] = mean_joint_anges[i].item()
+        #    self.stats[f"Joint {i} Std"] = std_joint_anges[i].item()
 
         mean_remaining = self._remaining(experience.obs_merged).mean()
         self.stats[f"Mean Remaining"] = mean_remaining.item()
@@ -162,7 +163,7 @@ class RobotArmEnvManager(EnvManager):
         rew = np.zeros([self.env_count], dtype=np.float32)
         trainingObs = np.zeros([self.env_count] + list(self.trainingSpec.shape), dtype= np.float32)
         goalObs = np.zeros([self.env_count] + list(self.goalSpec.shape), dtype= np.float32)
-        jointPosObs = np.zeros([self.env_count] + list(self.jointPosSpec.shape), dtype= np.float32)
+        #jointPosObs = np.zeros([self.env_count] + list(self.jointPosSpec.shape), dtype= np.float32)
         #goalPosObs = np.zeros([self.env_count] + list(self.goalPosSpec.shape), dtype= np.float32)
         remainingObs = np.zeros([self.env_count] + list(self.remainigSpec.shape), dtype= np.float32)
 
@@ -176,7 +177,7 @@ class RobotArmEnvManager(EnvManager):
             #Scale range from between 0.0 and 1.0 to -1.0 to 1.0
             trainingObs[agent_id] = decision_steps.obs[self.trainingIdx][step_index] * 2.0 - 1.0
             goalObs[agent_id] = decision_steps.obs[self.goalIdx][step_index] * 2.0 - 1.0
-            jointPosObs[agent_id] = decision_steps.obs[self.jointPosIdx][step_index]
+            #jointPosObs[agent_id] = decision_steps.obs[self.jointPosIdx][step_index]
             #goalPosObs[agent_id] = decision_steps.obs[self.goalPosIdx][step_index]
             remainingObs[agent_id] = decision_steps.obs[self.remainingIdx][step_index]
             rew[agent_id] = decision_steps.reward[step_index]
@@ -186,7 +187,7 @@ class RobotArmEnvManager(EnvManager):
             (
                 trainingObs.reshape((self.env_count, -1)),
                 goalObs.reshape((self.env_count, -1)),
-                jointPosObs.reshape((self.env_count, -1)),
+                #jointPosObs.reshape((self.env_count, -1)),
                 remainingObs.reshape((self.env_count, -1)),
                 #goalPosObs.reshape((self.env_count, -1)),
             ), axis=-1
@@ -202,8 +203,8 @@ class RobotArmEnvManager(EnvManager):
         return obs[:, self.goal_range].reshape(*([-1] + list(self.goal_sensor_space.shape)))
 
 
-    def _joint_angles(self, obs: torch.tensor):
-        return obs[:, self.joint_pos_range].reshape(*([-1] + list(self.joint_angels_space.shape)))
+    #def _joint_angles(self, obs: torch.tensor):
+    #    return obs[:, self.joint_pos_range].reshape(*([-1] + list(self.joint_angels_space.shape)))
 
 
     #def _goal_angles(self, obs: torch.tensor):
@@ -219,12 +220,12 @@ class RobotArmObsEncoder(torch.nn.Module):
 
         self.env = env
         self.num_obs_outputs = 192
-        self.num_conv_net_outputs = 2 * self.num_obs_outputs + np.prod(env.joint_angels_space.shape) + np.prod(env.remaining_space.shape)
+        self.num_conv_net_outputs = 2 * self.num_obs_outputs + np.prod(env.remaining_space.shape) #+ np.prod(env.joint_angels_space.shape)
 
         self.training_range = range(0, self.num_obs_outputs)
         self.goal_range = range(self.training_range.stop, self.training_range.stop + self.num_obs_outputs)
-        self.joint_pos_range = range(self.goal_range.stop, self.goal_range.stop + np.prod(env.joint_angels_space.shape))
-        self.remaining_range = range(self.joint_pos_range.stop, self.joint_pos_range.stop + np.prod(env.remaining_space.shape))
+        #self.joint_pos_range = range(self.goal_range.stop, self.goal_range.stop + np.prod(env.joint_angels_space.shape))
+        self.remaining_range = range(self.goal_range.stop, self.goal_range.stop + np.prod(env.remaining_space.shape))
 
         #self.cnn_layers = half_unet_v1(np.array(list(env.training_sensor_space.shape[1:]), np.int32))
         self.cnn_layers = resnet18(num_classes=self.num_obs_outputs)
@@ -257,7 +258,7 @@ class RobotArmObsEncoder(torch.nn.Module):
         # obs.shape == [batch_size, self.observation_space.shape]
         training_obs = self.env._training_obs(obs)
         goal_obs = self.env._goal_obs(obs)
-        joint_pos = self.env._joint_angles(obs)
+        #joint_pos = self.env._joint_angles(obs)
         remaining = self.env._remaining(obs)
 
         # flatten buffer dimensions since the cnn only accepts 3D or 4D input
@@ -265,7 +266,7 @@ class RobotArmObsEncoder(torch.nn.Module):
         with torch.no_grad():
             enc_goal = self.cnn_layers(goal_obs)
 
-        return torch.concat((enc_training, enc_goal, joint_pos, remaining), -1)
+        return torch.concat((enc_training, enc_goal, remaining), -1) #joint_pos,
 
     def _training_obs(self, obs: torch.tensor):
         return obs[:, self.training_range]
@@ -275,8 +276,8 @@ class RobotArmObsEncoder(torch.nn.Module):
         return obs[:, self.goal_range]
 
 
-    def _joint_angles(self, obs: torch.tensor):
-        return obs[:, self.joint_pos_range]
+    #def _joint_angles(self, obs: torch.tensor):
+    #    return obs[:, self.joint_pos_range]
 
 
     #def _goal_angles(self, obs: torch.tensor):
@@ -292,19 +293,19 @@ def run(dev_mode:bool = False, resume_lesson: int = None):
         "phase1": {
             "new_lesson_vf_only_updates": 0,
             "lesson_timeout_episodes": 80,
-            "policy_lr": 5e-5,
-            "vf_lr": 5e-5,
+            "policy_lr": 2e-4,
+            "vf_lr": 2e-4,
             "update_epochs" : 5,
             "discount": 0.95,
             "adv_lambda": 0.95,
-            "clip_ratio": 0.01,
+            "clip_ratio": 0.03,
             "target_kl": 0.03,
             "target_vf_delta": 1.0,
             "lr_decay": 0.90,
             "action_scaling": 4.0,
             "entropy_factor": 0.1,
 
-            "update_batch_size": 90,
+            "update_batch_size": 30,
             "update_batch_count": 3,
             "epochs": 2000,
             "resume_lesson": resume_lesson,
