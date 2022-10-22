@@ -219,7 +219,8 @@ class RobotArmObsEncoder(torch.nn.Module):
         super().__init__()
 
         self.env = env
-        self.num_obs_outputs = 192
+        self.num_obs_outputs = 64
+        self.num_mlp_outputs = self.num_obs_outputs * 2
         self.num_conv_net_outputs = 2 * self.num_obs_outputs + np.prod(env.remaining_space.shape) #+ np.prod(env.joint_angels_space.shape)
 
         self.training_range = range(0, self.num_obs_outputs)
@@ -227,15 +228,15 @@ class RobotArmObsEncoder(torch.nn.Module):
         #self.joint_pos_range = range(self.goal_range.stop, self.goal_range.stop + np.prod(env.joint_angels_space.shape))
         self.remaining_range = range(self.goal_range.stop, self.goal_range.stop + np.prod(env.remaining_space.shape))
 
-        #self.cnn_layers = half_unet_v1(np.array(list(env.training_sensor_space.shape[1:]), np.int32))
+        #self.cnn_layers = half_unet_v1(np.array(list(env.training_sensor_space.shape[1:]), np.int32), num_outputs=self.num_obs_outputs)
         self.cnn_layers = resnet18(num_classes=self.num_obs_outputs)
-        self.mlp = mlp([self.num_conv_net_outputs, 192, 192, self.num_obs_outputs], activation=torch.nn.ReLU, output_activation=torch.nn.Identity)
+        self.mlp = mlp([self.num_conv_net_outputs, 64, 64, self.num_mlp_outputs], activation=torch.nn.ReLU, output_activation=torch.nn.Identity)
         self.enc_obs_relu = torch.nn.ReLU(inplace=True)
         self.skip_relu = torch.nn.ReLU(inplace=True)
 
         if not split_outputs:
             self.num_outputs = 2 * np.prod(env.action_space.shape) + np.prod(env.remaining_space.shape)
-            self.out_layer = torch.nn.Linear(self.num_obs_outputs, self.num_outputs)
+            self.out_layer = torch.nn.Linear(self.num_mlp_outputs, self.num_outputs)
         else:
             self.num_outputs = self.num_obs_outputs
 
@@ -245,7 +246,7 @@ class RobotArmObsEncoder(torch.nn.Module):
         enc_obs = self._forward(obs)
         enc_obs = self.enc_obs_relu(enc_obs)
         out = self.mlp(enc_obs)
-        out += self._training_obs(enc_obs)
+        out[:, :self.num_obs_outputs] += self._training_obs(enc_obs)
         out = self.skip_relu(out)
         if not split_outputs:
             out = self.out_layer(out)

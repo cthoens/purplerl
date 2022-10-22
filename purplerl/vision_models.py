@@ -4,7 +4,7 @@ from torch.nn import Conv2d, Sequential, BatchNorm2d, ReLU, MaxPool2d, Linear, F
 
 import purplerl.workbook_env as Env
 
-def half_unet_v3():
+def half_unet_v3(num_outputs=128):
     return Sequential(
             # 16
             Conv2d(in_channels=1, out_channels=16, kernel_size=7, stride=1, padding=1),
@@ -36,7 +36,7 @@ def half_unet_v3():
             ReLU(inplace=True),
             MaxPool2d(kernel_size=2, stride=2),
             Flatten(),
-            Linear(1152, 128)
+            Linear(5120, num_outputs)
         )
 
 
@@ -75,7 +75,7 @@ def half_unet_v2():
             Linear(128, 128)
         )
 
-def half_unet_v1(input_resolution, in_channels=1):
+def half_unet_v1(input_resolution, in_channels=1, num_outputs=128):
     resolution = input_resolution
     resolution //= 2
     resolution //= 2
@@ -116,10 +116,5 @@ def half_unet_v1(input_resolution, in_channels=1):
             ReLU(inplace=True),
             MaxPool2d(kernel_size=2, stride=2),
             Flatten(),
-            Linear(np.prod(resolution)*64, 128),
-            ReLU(inplace=True),
-            Linear(128, 96),
-            ReLU(inplace=True),
-            Linear(96, 64),
-            ReLU(inplace=True),
+            Linear(np.prod(resolution)*64, num_outputs),
         )
