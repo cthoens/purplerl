@@ -293,8 +293,7 @@ def run(dev_mode:bool = False, resume_lesson: int = None):
         "phase1": {
             "new_lesson_warmup_updates": 8,
             "lesson_timeout_episodes": 80,
-            "policy_lr": 1e-4,
-            "vf_lr": 1e-4,
+            "initial_lr": 1e-4,
             "update_epochs" : 5,
             "discount": 0.95,
             "adv_lambda": 0.95,
@@ -323,8 +322,7 @@ def run(dev_mode:bool = False, resume_lesson: int = None):
 def create_trainer(
     project_name,
     exp_name,
-    policy_lr,
-    vf_lr,
+    initial_lr,
     update_epochs,
     discount: float = 0.95,
     adv_lambda: float = 0.95,
@@ -339,7 +337,7 @@ def create_trainer(
     lesson_timeout_episodes: int = 80,
     new_lesson_warmup_updates: int = 0,
     update_batch_size: int = 29,
-    update_batch_count: int = 2,
+    update_batch_count: int = 1,
     epochs: int = 3000,
     resume_lesson: int = None,
 ):
@@ -402,8 +400,7 @@ def create_trainer(
         policy = policy,
         experience = experience,
         value_net_tail = value_net_tail,
-        policy_lr = policy_lr,
-        vf_lr = vf_lr,
+        initial_lr = initial_lr,
         warmup_updates = new_lesson_warmup_updates,
         update_epochs = update_epochs,
         update_batch_size=update_batch_size,

@@ -148,7 +148,8 @@ class ContinuousPolicy(StochasticPolicy):
 
 class PPO():
     POLICY_LOSS = "Policy Loss"
-    POLICY_LR = "Policy LR"
+    LR = "LR"
+    LR_FACTOR = "LR Factor"
     KL = "KL"
     POLICY_EPOCHS = "Policy Epochs"
     VF_EPOCHS = "VF Epochs"
@@ -158,7 +159,6 @@ class PPO():
     VALUE_LOSS = "VF Loss"
     VALUE_LOSS_IN = "VF Loss In"
     VALUE_LOSS_FACTOR = "VF Loss Factor"
-    LR_FACTOR = "LR Factor"
     BACKTRACK_POLICY = "Backtrack Policy"
     BACKTRACK_VF = "Backtrack VF"
     VF_DELTA = "VF Delta"
@@ -178,8 +178,7 @@ class PPO():
         policy: ContinuousPolicy,
         experience: ExperienceBuffer,
         value_net_tail: torch.nn.Module,
-        policy_lr: float,
-        vf_lr: float,
+        initial_lr: float,
         update_batch_size: int,
         update_epochs: int,
         lam: float = 0.95,
@@ -193,8 +192,7 @@ class PPO():
         self.cfg = cfg
         self.policy = policy
         self.experience = experience
-        self.initial_policy_lr = policy_lr
-        self.initial_vf_lr = vf_lr
+        self.initial_lr = initial_lr
         self.update_epochs = update_epochs
         self.update_batch_size = update_batch_size * experience.num_envs
         self.clip_ratio = clip_ratio
@@ -210,11 +208,10 @@ class PPO():
         self.stats = {}
 
         self.value_net_tail = value_net_tail
-
         self.optimizer = Adam([
-            {'params': self.policy.obs_encoder.parameters(), 'lr': max(self.initial_vf_lr, self.initial_policy_lr)},
-            {'params': self.policy.action_dist_net_tail.parameters(), 'lr': self.initial_policy_lr},
-            {'params': self.value_net_tail.parameters(), 'lr': self.initial_vf_lr}
+            {'params': self.policy.obs_encoder.parameters(), 'lr': self.initial_lr},
+            {'params': self.policy.action_dist_net_tail.parameters(), 'lr': self.initial_lr},
+            {'params': self.value_net_tail.parameters(), 'lr': self.initial_lr}
         ])
 
 
@@ -479,12 +476,11 @@ class PPO():
 
         # reset the optimizer to make sure momentum does not keep driving
         # the parameters into the wrong direction
-        vf_lr = self.initial_vf_lr * self.lr_factor
-        policy_lr = self.initial_policy_lr * self.lr_factor
+        lr = self.initial_lr * self.lr_factor
         self.optimizer = Adam([
-            {'params': self.policy.obs_encoder.parameters(), 'lr': max(vf_lr, policy_lr)},
-            {'params': self.policy.action_dist_net_tail.parameters(), 'lr': policy_lr},
-            {'params': self.value_net_tail.parameters(), 'lr': vf_lr}
+            {'params': self.policy.obs_encoder.parameters(), 'lr': lr},
+            {'params': self.policy.action_dist_net_tail.parameters(), 'lr': lr},
+            {'params': self.value_net_tail.parameters(), 'lr': lr}
         ])
 
 
@@ -566,20 +562,19 @@ class PPO():
         return {
             'value_net_state_dict': {k: v.cpu() for k, v in self.value_net_tail.state_dict().items()},
             'optimizer_state_dict': self.optimizer.state_dict(),
-            'initial_policy_lr': self.initial_policy_lr,
-            'initial_vf_lr': self.initial_vf_lr,
+            'initial_lr': self.initial_lr,
             'lr_factor': self.lr_factor,
             'update_balance': self.update_balance,
             'remaining_warmup_updates': self.remaining_warmup_updates,
-            'vf_priority': self.vf_priority
+            'vf_priority': self.vf_priority,
+            'remaining_warmup_updates': self.remaining_warmup_updates
         }
 
 
     def load_checkpoint(self, checkpoint):
         self.value_net_tail.load_state_dict(checkpoint['value_net_state_dict'])
         self.optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
-        self.initial_policy_lr = checkpoint['initial_policy_lr']
-        self.initial_vf_lr = checkpoint['initial_vf_lr']
+        self.initial_lr = checkpoint['initial_lr']
         self.lr_factor = checkpoint['lr_factor']
         self.update_balance = checkpoint['update_balance']
         self.vf_priority = checkpoint.get('vf_priority', self.vf_priority)
