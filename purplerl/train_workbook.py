@@ -169,7 +169,7 @@ def create_trainer(
         policy = policy,
         experience = experience,
         hidden_sizes = [128, 128],
-        vf_only_updates= vf_only_update,
+        warmup_updates= vf_only_update,
         policy_lr = policy_lr,
         vf_lr = vf_lr,
         update_epochs = update_epochs,
@@ -177,7 +177,7 @@ def create_trainer(
         lam = adv_lambda,
         clip_ratio = clip_ratio,
         target_kl = target_kl,
-        target_vf_delta = target_vf_delta,
+        target_vf_decay = target_vf_delta,
         lr_decay = lr_decay
     )
     wandb.watch((policy, policy_updater.value_net_tail), log='all', log_freq=20)

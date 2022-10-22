@@ -153,6 +153,7 @@ class PPO():
     POLICY_EPOCHS = "Policy Epochs"
     VF_EPOCHS = "VF Epochs"
     UPDATE_BALANCE = "Update Balance"
+    VF_PRIORITY = "VF Priority"
     CLIP_FACTOR = "Clip Factor"
     VALUE_LOSS = "VF Loss"
     VALUE_LOSS_IN = "VF Loss In"
@@ -166,6 +167,12 @@ class PPO():
     MAX_UPDATE_BALANCE = 1.0
     UPDATE_BALANCE_STEP = 0.001
 
+    MAX_VF_PRIORITY = 3.0
+    MIN_VF_PRIORITY = 0.1
+    #VF_PRIORITY_STEP = 0.82 # 0.82 => 11 steps from 10.0 to ~1; 23 steps to ~0.1
+    #VF_PRIORITY_STEP = 0.94  # 0.94 =>
+    VF_PRIORITY_STEP = 0.90  # 0.90 => 10 steps from 3.0 to ~1.0; 21 steps to ~0.33
+
     def __init__(self,
         cfg: dict,
         policy: ContinuousPolicy,
@@ -178,10 +185,10 @@ class PPO():
         lam: float = 0.95,
         clip_ratio: float = 0.2,
         target_kl: float = 0.15,
-        target_vf_delta: float = 0.1,
+        target_vf_decay: float = 0.1,
         lr_decay: float = 0.95,
         entropy_factor : float = 0.0,
-        vf_only_updates: int = 0
+        warmup_updates: int = 0
     ) -> None:
         self.cfg = cfg
         self.policy = policy
@@ -192,13 +199,14 @@ class PPO():
         self.update_batch_size = update_batch_size * experience.num_envs
         self.clip_ratio = clip_ratio
         self.target_kl = target_kl
-        self.target_vf_delta = target_vf_delta
+        self.target_vf_decay = target_vf_decay
         self.lam = lam
         self.lr_factor = 1.0
         self.lr_decay = lr_decay
         self.entropy_factor = entropy_factor
         self.update_balance = (self.MAX_UPDATE_BALANCE - self.MIN_UPDATE_BALANCE) / 2.0
-        self.remaining_vf_only_updates = vf_only_updates
+        self.vf_priority = self.MAX_VF_PRIORITY
+        self.remaining_warmup_updates = warmup_updates
         self.stats = {}
 
         self.value_net_tail = value_net_tail
@@ -244,11 +252,11 @@ class PPO():
 
 
     def update(self):
-        for _ in range(self.update_epochs // 2):
+        for _ in range(self.update_epochs):
             if self._do_update():
-                if self.remaining_vf_only_updates>0:
-                    print(f"* {self.remaining_vf_only_updates}", end=None)
-                self.remaining_vf_only_updates = max(self.remaining_vf_only_updates - 1, 0)
+                if self.remaining_warmup_updates>0:
+                    print(f"* {self.remaining_warmup_updates}", end=None)
+                self.remaining_warmup_updates = max(self.remaining_warmup_updates - 1, 0)
 
                 return
 
@@ -265,6 +273,7 @@ class PPO():
         self.stats[self.BACKTRACK_VF] = 0
         self.stats[self.LR_FACTOR] = self.lr_factor
         self.stats[self.UPDATE_BALANCE] = self.update_balance
+        self.stats[self.VF_PRIORITY] = self.vf_priority
 
         counts = np.zeros(4)
         totals = torch.zeros(4, requires_grad=False, **self.cfg.tensor_args)
@@ -273,6 +282,7 @@ class PPO():
         last_epoch_value_loss = float("inf")
         #last_epoch_kl = 0.0
         value_loss_old = float("-inf")
+        is_warmup_update = self.remaining_warmup_updates > 0
 
         cp = None
         for update_epoch in range(self.update_epochs+1):
@@ -309,10 +319,10 @@ class PPO():
                 # -------------
                 # Note: Calculdate even if update_policy == False to check for passive_policy_progression (see below)
 
-                if self.remaining_vf_only_updates > 0:
-                    batch_policy_loss, kl, clip_factor, entropy = self._stationary_policy_loss(logp_old, encoded_obs, act, adv)
-                else:
-                    batch_policy_loss, kl, clip_factor, entropy = self._policy_loss(logp_old, encoded_obs, act, adv)
+                #if self.remaining_warmup_updates > 0:
+                #   batch_policy_loss, kl, clip_factor, entropy = self._stationary_policy_loss(logp_old, encoded_obs, act, adv)
+                #else:
+                batch_policy_loss, kl, clip_factor, entropy = self._policy_loss(logp_old, encoded_obs, act, adv)
 
                 kl_total += kl.sum().detach()
                 kl_count += np.prod(kl.shape).item()
@@ -349,7 +359,7 @@ class PPO():
                 # -------------
 
                 vf_loss_factor = torch.abs(batch_policy_loss.detach() / batch_value_loss.detach())
-                vf_loss_factor = torch.clamp(vf_loss_factor, 0.33, 3.0) * 1.0 * 10.0
+                vf_loss_factor = torch.clamp(vf_loss_factor, 0.25, 4.0) * self.vf_priority
 
                 loss = batch_policy_loss + vf_loss_factor * batch_value_loss  + self.entropy_factor * entropy.mean()
                 if not is_validate_epoch:
@@ -376,22 +386,25 @@ class PPO():
                 policy_done = True
             else:
                 print("  ", end="")
-            print(f"{epoch_kl:.6f} ", end="")
+            print(f"{epoch_kl:.4f} ", end="")
 
             vf_done = False
             epoch_value_loss = value_loss_total.item() / value_loss_count.item()
+            vf_delta = value_loss_old - epoch_value_loss
             value_loss_increased = epoch_value_loss > last_epoch_value_loss
-            value_update_limit_reached = value_loss_old - epoch_value_loss > self.target_vf_delta
+            value_update_limit_reached = not is_warmup_update and vf_delta > value_loss_old * self.target_vf_decay
             if value_loss_increased or value_update_limit_reached:
                 print("->", end="")
                 self.stats[self.BACKTRACK_VF] = 1.0
                 backtrack = True
                 vf_done = True
-            print(f"{epoch_value_loss:.6f}")
+            print(f"{epoch_value_loss:.4f}")
 
             if policy_done and not vf_done:
                 self.update_balance = min(self.update_balance + self.UPDATE_BALANCE_STEP, self.MAX_UPDATE_BALANCE)
+                self._inc_vf_priority()
             if vf_done and not policy_done:
+                self._dec_vf_priority()
                 self.update_balance = max(self.update_balance - self.UPDATE_BALANCE_STEP, self.MIN_UPDATE_BALANCE)
 
             if backtrack:
@@ -430,6 +443,11 @@ class PPO():
                 self.optimizer.step()
 
 
+        below_kl_lower_bound = self.stats[self.KL] < self.target_kl * (2.0 / 3.0)
+        if below_kl_lower_bound:
+            self._dec_vf_priority()
+        else:
+            self._inc_vf_priority()
         self._inc_lr_factor()
 
         return True
@@ -441,21 +459,21 @@ class PPO():
         factor = (1.0 / self.lr_decay)**(1/decay_revert_steps)
 
         self.lr_factor *= factor
-        print(f"====> {self.lr_factor:.6f}")
+        print(f"====> {self.lr_factor:.4f}  /  {self.vf_priority:.4f}")
         for group in self.optimizer.param_groups:
             group['lr'] = group['lr'] * factor
 
 
     def _dec_lr_factor(self):
         self.lr_factor *= self.lr_decay
-        print(f"====> {self.lr_factor:.6f}")
+        print(f"====> {self.lr_factor:.4f}  /  {self.vf_priority:.4f}")
         for group in self.optimizer.param_groups:
             group['lr'] = group['lr'] * self.lr_decay
 
 
     def _set_lr_factor(self, value):
         self.lr_factor = value
-        print(f"====> {self.lr_factor:.6f}")
+        print(f"====> {self.lr_factor:.4f}  /  {self.vf_priority:.4f}")
         for group in self.optimizer.param_groups:
             group['lr'] = group['lr'] * self.lr_decay
 
@@ -468,6 +486,16 @@ class PPO():
             {'params': self.policy.action_dist_net_tail.parameters(), 'lr': policy_lr},
             {'params': self.value_net_tail.parameters(), 'lr': vf_lr}
         ])
+
+
+    def _inc_vf_priority(self):
+        decay_revert_steps = 3
+        factor = (1.0 / self.VF_PRIORITY_STEP)**(1/decay_revert_steps)
+        self.vf_priority = min(self.vf_priority * factor, self.MAX_VF_PRIORITY)
+
+
+    def _dec_vf_priority(self):
+        self.vf_priority = max(self.vf_priority * self.VF_PRIORITY_STEP, self.MIN_VF_PRIORITY)
 
 
     def _stationary_policy_loss(self, logp_old, encoded_obs, act, adv) -> Tuple[torch.tensor, torch.tensor, torch.tensor, torch.tensor]:
@@ -542,7 +570,8 @@ class PPO():
             'initial_vf_lr': self.initial_vf_lr,
             'lr_factor': self.lr_factor,
             'update_balance': self.update_balance,
-            'vf_only_update': self.remaining_vf_only_updates
+            'remaining_warmup_updates': self.remaining_warmup_updates,
+            'vf_priority': self.vf_priority
         }
 
 
@@ -553,7 +582,8 @@ class PPO():
         self.initial_vf_lr = checkpoint['initial_vf_lr']
         self.lr_factor = checkpoint['lr_factor']
         self.update_balance = checkpoint['update_balance']
-        self.remaining_vf_only_updates = checkpoint.get('vf_only_update', 0)
+        self.vf_priority = checkpoint.get('vf_priority', self.vf_priority)
+        self.remaining_warmup_updates = checkpoint.get('remaining_warmup_updates', 0)
 
 
     def _full_checkpoint(self):

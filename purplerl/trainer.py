@@ -23,6 +23,7 @@ class Trainer:
     TRAINER = "Trainer"
     TIMING = "Timing"
     ENTROPY = "Entropy"
+    MEAN_RETURN_EMA = "Mean Return EMA"
     LESSON_TIMEOUT = "Lesson Timeout"
     ENV_TIME = "Env Time"
     DECISION_TIME = "Decision Time"
@@ -39,7 +40,7 @@ class Trainer:
         experience: ExperienceBuffer,
         policy: StochasticPolicy,
         policy_updater: PPO,
-        new_lesson_vf_only_updates: int,
+        new_lesson_warmup_updates: int,
         lesson_timeout_episodes: int = 100,
         resume_lesson: int = None,
         epochs=50,
@@ -59,15 +60,17 @@ class Trainer:
         self.lesson_start_epoch = 0
         self.lesson_timeout_episodes = lesson_timeout_episodes
         self.resume_lesson = resume_lesson
-        self.new_lesson_vf_only_updates = new_lesson_vf_only_updates
+        self.new_lesson_warmup_updates = new_lesson_warmup_updates
         self.resume_epoch = 1 # have epochs start at 1 and not 0
         self.eval_func=eval_func
         self.output_dir = output_dir
+        self.mean_return_ema = 0.0
         self.max_mean_return = float('-inf')
         self.max_mean_return_epoch = 0
         self.own_stats = {
             self.ENTROPY: -1.0,
-            self.LESSON: 0
+            self.LESSON: 0,
+            self.MEAN_RETURN_EMA: 0,
         }
         self.timig_stats = {
             self.ENV_TIME: 0.0,
@@ -92,16 +95,18 @@ class Trainer:
     def run_training(self):
         for self.epoch in range(self.epochs):
             self.run_epoch()
-            wandb.log(copy.deepcopy(self.all_stats), step=self.epoch)
-            self.log_to_console()
 
-            epoch_mean_return = self.experience.mean_return()
-            lesson_warmup_phase = self.epoch - self.lesson_start_epoch <= self.new_lesson_vf_only_updates
+            if self.epoch<=1:
+                self.mean_return_ema = self.experience.mean_return()
+            else:
+                self.mean_return_ema = 0.6 * self.experience.mean_return() + 0.4 * self.mean_return_ema
+            self.own_stats[self.MEAN_RETURN_EMA] = self.mean_return_ema
+            lesson_warmup_phase = self.epoch - self.lesson_start_epoch <= self.new_lesson_warmup_updates
             if lesson_warmup_phase:
                  self.max_mean_return_epoch = self.epoch + 1
                  self.max_mean_return = float('-inf')
-            elif epoch_mean_return > self.max_mean_return:
-                 self.max_mean_return = epoch_mean_return
+            elif self.mean_return_ema > self.max_mean_return:
+                 self.max_mean_return = self.mean_return_ema
                  self.max_mean_return_epoch = self.epoch
 
             lesson_timeout = self.epoch - self.max_mean_return_epoch
@@ -109,10 +114,13 @@ class Trainer:
             if lesson_timeout > self.lesson_timeout_episodes or (self.experience.success_rate() > 0.99 and lesson_timeout > 30):
                 self.start_lesson(self.lesson + 1)
 
+            wandb.log(copy.deepcopy(self.all_stats), step=self.epoch)
+            self.log_to_console()
+
     def start_lesson(self, lesson: int):
         self.lesson = lesson
         self.lesson_start_epoch = self.epoch + 1
-        self.policy_updater.remaining_vf_only_updates = self.new_lesson_vf_only_updates
+        self.policy_updater.remaining_warmup_updates = self.new_lesson_warmup_updates
         self.max_mean_return = float('-inf')
         self.max_mean_return_epoch = self.epoch + 1
         self.own_stats[self.LESSON] = self.lesson
@@ -162,7 +170,7 @@ class Trainer:
         for _, stats in self.console_stats.items():
             for name, value in stats.items():
                 if type(value) == float:
-                    log_str += f"{name}: {value:.4f}; "
+                    log_str += f"{name}: {value:.3f}; "
                 else:
                     log_str += f"{name}: {value}; "
 
