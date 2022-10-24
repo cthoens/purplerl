@@ -220,11 +220,12 @@ class RobotArmObsEncoder(torch.nn.Module):
 
         self.env = env
         self.num_obs_outputs = 64
-        self.num_mlp_outputs = self.num_obs_outputs * 2
+        self.num_mlp_outputs = 2 * self.num_obs_outputs
         self.num_conv_net_outputs = 2 * self.num_obs_outputs + np.prod(env.remaining_space.shape) #+ np.prod(env.joint_angels_space.shape)
 
         self.training_range = range(0, self.num_obs_outputs)
         self.goal_range = range(self.training_range.stop, self.training_range.stop + self.num_obs_outputs)
+        self.training_and_goal_range = range(0, self.training_range.stop + self.num_obs_outputs)
         #self.joint_pos_range = range(self.goal_range.stop, self.goal_range.stop + np.prod(env.joint_angels_space.shape))
         self.remaining_range = range(self.goal_range.stop, self.goal_range.stop + np.prod(env.remaining_space.shape))
 
@@ -246,7 +247,7 @@ class RobotArmObsEncoder(torch.nn.Module):
         enc_obs = self._forward(obs)
         enc_obs = self.enc_obs_relu(enc_obs)
         out = self.mlp(enc_obs)
-        out[:, :self.num_obs_outputs] += self._training_obs(enc_obs)
+        out[:, :self.num_mlp_outputs] += self._training_and_goal_obs(enc_obs)
         out = self.skip_relu(out)
         if not split_outputs:
             out = self.out_layer(out)
@@ -261,16 +262,17 @@ class RobotArmObsEncoder(torch.nn.Module):
         goal_obs = self.env._goal_obs(obs)
         #joint_pos = self.env._joint_angles(obs)
         remaining = self.env._remaining(obs)
-
-        # flatten buffer dimensions since the cnn only accepts 3D or 4D input
         enc_training = self.cnn_layers(training_obs)
-        with torch.no_grad():
-            enc_goal = self.cnn_layers(goal_obs)
+        enc_goal = self.cnn_layers(goal_obs)
 
         return torch.concat((enc_training, enc_goal, remaining), -1) #joint_pos,
 
     def _training_obs(self, obs: torch.tensor):
         return obs[:, self.training_range]
+
+
+    def _training_and_goal_obs(self, obs: torch.tensor):
+        return obs[:, self.training_and_goal_range]
 
 
     def _goal_obs(self, obs: torch.tensor):
@@ -305,8 +307,8 @@ def run(dev_mode:bool = False, resume_lesson: int = None):
             "action_scaling": 4.0,
             "entropy_factor": 0.2,
 
-            "update_batch_size": 30,
-            "update_batch_count": 2,
+            "update_batch_size": 20,
+            "update_batch_count": 3,
             "epochs": 2000,
             "resume_lesson": resume_lesson,
         }

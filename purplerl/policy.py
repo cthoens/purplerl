@@ -167,11 +167,9 @@ class PPO():
     MAX_UPDATE_BALANCE = 1.0
     UPDATE_BALANCE_STEP = 0.001
 
-    MAX_VF_PRIORITY = 3.0
-    MIN_VF_PRIORITY = 0.1
-    #VF_PRIORITY_STEP = 0.82 # 0.82 => 11 steps from 10.0 to ~1; 23 steps to ~0.1
-    #VF_PRIORITY_STEP = 0.94  # 0.94 =>
-    VF_PRIORITY_STEP = 0.90  # 0.90 => 10 steps from 3.0 to ~1.0; 21 steps to ~0.33
+    MAX_VF_PRIORITY = 2.0
+    MIN_VF_PRIORITY = 1.0 / MAX_VF_PRIORITY
+    VF_PRIORITY_STEP = 0.94  # 0.90 => 11 steps from 2.0 to ~1.0; 23 steps to ~0.5
 
     def __init__(self,
         cfg: dict,
@@ -257,8 +255,8 @@ class PPO():
 
                 return
 
-            # Note: Must be done after restoring the checkpoint
-            self._set_lr_factor(self.lr_factor * self.lr_decay)
+        # Note: Reset optimizier stats we all attempts were rolled back
+        self._reset_lr_momentum()
 
 
     def _do_update(self):
@@ -408,11 +406,13 @@ class PPO():
                 assert(not is_first_epoch)
                 # Keep update balance updates from getting reverted by the rollback
                 update_balance_backup = self.update_balance
+                vf_priority_backup = self.vf_priority
                 self._load_full_checkpoint(cp)
                 self.update_balance = update_balance_backup
+                self.vf_priority = vf_priority_backup
 
-                if not is_after_first_update:
-                    self._dec_lr_factor()
+                #Note: No need to backup the lr across the roll back, since this overwrites it
+                self._dec_lr_factor()
 
                 return not is_after_first_update
 
@@ -440,11 +440,7 @@ class PPO():
                 self.optimizer.step()
 
 
-        below_kl_lower_bound = self.stats[self.KL] < self.target_kl * (2.0 / 3.0)
-        if below_kl_lower_bound:
-            self._dec_vf_priority()
-        else:
-            self._inc_vf_priority()
+        self._inc_vf_priority()
         self._inc_lr_factor()
 
         return True
@@ -456,27 +452,25 @@ class PPO():
         factor = (1.0 / self.lr_decay)**(1/decay_revert_steps)
 
         self.lr_factor *= factor
+        lr = self.initial_lr * self.lr_factor
         print(f"====> {self.lr_factor:.4f}  /  {self.vf_priority:.4f}")
         for group in self.optimizer.param_groups:
-            group['lr'] = group['lr'] * factor
+            group['lr'] = lr
 
 
     def _dec_lr_factor(self):
         self.lr_factor *= self.lr_decay
+        lr = self.initial_lr * self.lr_factor
         print(f"====> {self.lr_factor:.4f}  /  {self.vf_priority:.4f}")
         for group in self.optimizer.param_groups:
-            group['lr'] = group['lr'] * self.lr_decay
+            group['lr'] = lr
 
 
-    def _set_lr_factor(self, value):
-        self.lr_factor = value
-        print(f"====> {self.lr_factor:.4f}  /  {self.vf_priority:.4f}")
-        for group in self.optimizer.param_groups:
-            group['lr'] = group['lr'] * self.lr_decay
+    def _reset_lr_momentum(self):
+        lr = self.initial_lr * self.lr_factor
 
         # reset the optimizer to make sure momentum does not keep driving
         # the parameters into the wrong direction
-        lr = self.initial_lr * self.lr_factor
         self.optimizer = Adam([
             {'params': self.policy.obs_encoder.parameters(), 'lr': lr},
             {'params': self.policy.action_dist_net_tail.parameters(), 'lr': lr},
@@ -485,7 +479,7 @@ class PPO():
 
 
     def _inc_vf_priority(self):
-        decay_revert_steps = 3
+        decay_revert_steps = 1
         factor = (1.0 / self.VF_PRIORITY_STEP)**(1/decay_revert_steps)
         self.vf_priority = min(self.vf_priority * factor, self.MAX_VF_PRIORITY)
 

@@ -1,11 +1,9 @@
 import copy
-from email import policy
 import time
-import joblib
 import os
 import os.path as osp
 import pathlib
-import warnings
+from datetime import timedelta
 
 import numpy as np
 import torch
@@ -111,11 +109,40 @@ class Trainer:
 
             lesson_timeout = self.epoch - self.max_mean_return_epoch
             self.own_stats[self.LESSON_TIMEOUT] = min((self.lesson_timeout_episodes - lesson_timeout) / self.lesson_timeout_episodes, 1.0)
-            if lesson_timeout > self.lesson_timeout_episodes or (self.experience.success_rate() > 0.99 and lesson_timeout > 30):
+            lesson_finished = lesson_timeout > self.lesson_timeout_episodes or (self.experience.success_rate() > 0.99 and lesson_timeout > 30)
+            lesson_successfull = self.experience.success_rate()>=0.9
+            if lesson_finished and lesson_successfull:
+                wandb.alert(
+                    title='New lesson',
+                    text=f'Starting lesson {self.lesson +1}',
+                    level=wandb.AlertLevel.INFO,
+                    wait_duration=timedelta(minutes=1)
+                )
                 self.start_lesson(self.lesson + 1)
 
             wandb.log(copy.deepcopy(self.all_stats), step=self.epoch)
             self.log_to_console()
+
+            if self.policy_updater.lr_factor < 0.01:
+                wandb.alert(
+                    title='Learning rate collapsed',
+                    text=f'Learning rate collapsed',
+                    level=wandb.AlertLevel.ERROR,
+                    wait_duration=timedelta(minutes=1)
+                )
+                print("Learning rate collapsed")
+                return
+
+            if lesson_finished and not lesson_successfull:
+                wandb.alert(
+                    title='Lesson finished unseccessfully',
+                    text=f'Lesson finished unseccessfully',
+                    level=wandb.AlertLevel.ERROR,
+                    wait_duration=timedelta(minutes=1)
+                )
+
+                print("Lesson finished unseccessfully")
+                return
 
     def start_lesson(self, lesson: int):
         self.lesson = lesson
@@ -177,6 +204,7 @@ class Trainer:
         print(f"Epoch: {self.epoch:3}; L: {self.lesson}; {log_str}")
 
 
+    @torch.inference_mode()
     def _collect_experience(self):
         env_time = time.time()
         self.experience.reset()
