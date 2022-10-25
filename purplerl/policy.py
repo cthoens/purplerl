@@ -167,9 +167,9 @@ class PPO():
     MAX_UPDATE_BALANCE = 1.0
     UPDATE_BALANCE_STEP = 0.001
 
-    MAX_VF_PRIORITY = 2.0
-    MIN_VF_PRIORITY = 1.0 / MAX_VF_PRIORITY
-    VF_PRIORITY_STEP = 0.94  # 0.90 => 11 steps from 2.0 to ~1.0; 23 steps to ~0.5
+    MAX_VF_PRIORITY = 100.0
+    MIN_VF_PRIORITY = 1.0
+    VF_PRIORITY_STEP = 0.90  # 0.90 => 11 steps from 2.0 to ~1.0; 23 steps to ~0.5
 
     def __init__(self,
         cfg: dict,
@@ -353,8 +353,8 @@ class PPO():
                 # Backward pass
                 # -------------
 
-                vf_loss_factor = torch.abs(batch_policy_loss.detach() / batch_value_loss.detach())
-                vf_loss_factor = torch.clamp(vf_loss_factor, 0.25, 4.0) * self.vf_priority
+                #vf_loss_factor = torch.abs(batch_policy_loss.detach() / batch_value_loss.detach())
+                vf_loss_factor = self.vf_priority
 
                 loss = batch_policy_loss + vf_loss_factor * batch_value_loss  + self.entropy_factor * entropy.mean()
                 if not is_validate_epoch:
@@ -365,7 +365,7 @@ class PPO():
                 del entropy
                 del loss
             # end for: iterate through dataset batches
-            self.stats[self.VALUE_LOSS_FACTOR] = vf_loss_factor.item()
+            self.stats[self.VALUE_LOSS_FACTOR] = vf_loss_factor
 
             # whether to roll back policy and vf to state before last update
             backtrack = False

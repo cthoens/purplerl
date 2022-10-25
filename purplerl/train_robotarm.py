@@ -25,13 +25,16 @@ cfg = GpuConfig()
 split_outputs = False
 
 class RobotArmEnvManager(EnvManager):
-    def __init__(self, file_name, action_scaling = 2.0, *, port_ = 6064, seed = 0, timeout_wait = 120):
+    def __init__(self, file_name, action_scaling = 2.0, force_vulkan = True, *, port_ = 6064, seed = 0, timeout_wait = 120):
         super().__init__()
         self.action_scaling = action_scaling
 
         self.stats_channel = StatsSideChannel()
         self.params_channel = EnvironmentParametersChannel()
         self.config_channel = EngineConfigurationChannel()
+        args = []
+        if force_vulkan:
+            args += ["-force-vulkan"]
         self.env = UnityEnvironment(
             file_name=file_name,
             worker_id=0,
@@ -42,7 +45,7 @@ class RobotArmEnvManager(EnvManager):
             timeout_wait=timeout_wait,
             side_channels=[self.stats_channel, self.params_channel, self.config_channel],
             log_folder=".",
-            additional_args=["-force-vulkan"]
+            additional_args=args
         )
 
         self.env.reset()
@@ -219,7 +222,7 @@ class RobotArmObsEncoder(torch.nn.Module):
         super().__init__()
 
         self.env = env
-        self.num_obs_outputs = 64
+        self.num_obs_outputs = 128
         self.num_mlp_outputs = 2 * self.num_obs_outputs
         self.num_conv_net_outputs = 2 * self.num_obs_outputs + np.prod(env.remaining_space.shape) #+ np.prod(env.joint_angels_space.shape)
 
@@ -231,7 +234,7 @@ class RobotArmObsEncoder(torch.nn.Module):
 
         #self.cnn_layers = half_unet_v1(np.array(list(env.training_sensor_space.shape[1:]), np.int32), num_outputs=self.num_obs_outputs)
         self.cnn_layers = resnet18(num_classes=self.num_obs_outputs)
-        self.mlp = mlp([self.num_conv_net_outputs, 64, 64, self.num_mlp_outputs], activation=torch.nn.ReLU, output_activation=torch.nn.Identity)
+        self.mlp = mlp([self.num_conv_net_outputs, 2048, 2048, self.num_mlp_outputs], activation=torch.nn.ReLU, output_activation=torch.nn.Identity)
         self.enc_obs_relu = torch.nn.ReLU(inplace=True)
         self.skip_relu = torch.nn.ReLU(inplace=True)
 
