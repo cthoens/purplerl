@@ -151,6 +151,7 @@ class PPO():
     LR = "LR"
     LR_FACTOR = "LR Factor"
     KL = "KL"
+    ABS_KL = "Abs. KL"
     POLICY_EPOCHS = "Policy Epochs"
     VF_EPOCHS = "VF Epochs"
     UPDATE_BALANCE = "Update Balance"
@@ -167,7 +168,7 @@ class PPO():
     MAX_UPDATE_BALANCE = 1.0
     UPDATE_BALANCE_STEP = 0.001
 
-    MAX_VF_PRIORITY = 100.0
+    MAX_VF_PRIORITY = 20.0
     MIN_VF_PRIORITY = 1.0
     VF_PRIORITY_STEP = 0.90  # 0.90 => 11 steps from 2.0 to ~1.0; 23 steps to ~0.5
 
@@ -270,10 +271,10 @@ class PPO():
         self.stats[self.UPDATE_BALANCE] = self.update_balance
         self.stats[self.VF_PRIORITY] = self.vf_priority
 
-        counts = np.zeros(4)
-        totals = torch.zeros(4, requires_grad=False, **self.cfg.tensor_args)
-        policy_loss_total, value_loss_total, kl_total, clip_factor_total = totals[0:1], totals[1:2], totals[2:3], totals[3:4]
-        policy_loss_count, value_loss_count, kl_count, clip_factor_count = counts[0:1], counts[1:2], counts[2:3], counts[3:4]
+        counts = np.zeros(5)
+        totals = torch.zeros(5, requires_grad=False, **self.cfg.tensor_args)
+        policy_loss_total, value_loss_total, kl_total, abs_kl_total, clip_factor_total = totals[0:1], totals[1:2], totals[2:3], totals[3:4], totals[4:5]
+        policy_loss_count, value_loss_count, kl_count, abs_kl_count, clip_factor_count = counts[0:1], counts[1:2], counts[2:3], counts[3:4], totals[4:5]
         last_epoch_value_loss = float("inf")
         #last_epoch_kl = 0.0
         value_loss_old = float("-inf")
@@ -321,6 +322,8 @@ class PPO():
 
                 kl_total += kl.sum().detach()
                 kl_count += np.prod(kl.shape).item()
+                abs_kl_total += torch.abs(kl).sum().detach()
+                abs_kl_count += np.prod(kl.shape).item()
                 policy_loss_total += batch_policy_loss.sum().detach()
                 policy_loss_count += np.prod(batch_policy_loss.shape).item()
                 clip_factor_total += clip_factor.sum().detach()
@@ -427,6 +430,7 @@ class PPO():
             if not is_first_epoch:
                 self.stats[self.POLICY_EPOCHS] += 1
                 self.stats[self.KL] = kl_total.item() / kl_count.item()
+                self.stats[self.ABS_KL] = abs_kl_total.item() / abs_kl_count.item()
                 if clip_factor_count != 0:
                     self.stats[self.POLICY_LOSS] = policy_loss_total.item() / policy_loss_count.item()
                     self.stats[self.CLIP_FACTOR] = clip_factor_total.item() / clip_factor_count.item()

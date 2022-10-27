@@ -223,7 +223,8 @@ class RobotArmObsEncoder(torch.nn.Module):
 
         self.env = env
         self.num_obs_outputs = 128
-        self.num_mlp_outputs = 2 * self.num_obs_outputs
+        self.num_combined_obs_outputs = 2 * self.num_obs_outputs
+        self.num_mlp_outputs = 2048
         self.num_conv_net_outputs = 2 * self.num_obs_outputs + np.prod(env.remaining_space.shape) #+ np.prod(env.joint_angels_space.shape)
 
         self.training_range = range(0, self.num_obs_outputs)
@@ -234,7 +235,7 @@ class RobotArmObsEncoder(torch.nn.Module):
 
         #self.cnn_layers = half_unet_v1(np.array(list(env.training_sensor_space.shape[1:]), np.int32), num_outputs=self.num_obs_outputs)
         self.cnn_layers = resnet18(num_classes=self.num_obs_outputs)
-        self.mlp = mlp([self.num_conv_net_outputs, 2048, 2048, self.num_mlp_outputs], activation=torch.nn.ReLU, output_activation=torch.nn.Identity)
+        self.mlp = mlp([self.num_conv_net_outputs, 1024, 1024, self.num_mlp_outputs], activation=torch.nn.ReLU, output_activation=torch.nn.Identity)
         self.enc_obs_relu = torch.nn.ReLU(inplace=True)
         self.skip_relu = torch.nn.ReLU(inplace=True)
 
@@ -250,7 +251,7 @@ class RobotArmObsEncoder(torch.nn.Module):
         enc_obs = self._forward(obs)
         enc_obs = self.enc_obs_relu(enc_obs)
         out = self.mlp(enc_obs)
-        out[:, :self.num_mlp_outputs] += self._training_and_goal_obs(enc_obs)
+        out[:, :self.num_combined_obs_outputs] += self._training_and_goal_obs(enc_obs)
         out = self.skip_relu(out)
         if not split_outputs:
             out = self.out_layer(out)
@@ -311,7 +312,7 @@ def run(dev_mode:bool = False, resume_lesson: int = None):
             "entropy_factor": 0.2,
 
             "update_batch_size": 20,
-            "update_batch_count": 3,
+            "update_batch_count": 5,
             "epochs": 2000,
             "resume_lesson": resume_lesson,
         }
@@ -351,7 +352,7 @@ def create_trainer(
 
     save_freq = 50
 
-    file_name = "/home/cthoens/code/UnityRL/ml-agents-robots/Builds/RobotArm.x86_64"
+    file_name = "../env_build/RobotArm.x86_64"
     env_manager= RobotArmEnvManager(file_name, action_scaling = action_scaling)
 
     # TODO Tell wandb about it

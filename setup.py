@@ -9,7 +9,7 @@ setup(
    packages=['purplerl'],
    install_requires=[
       'cloudpickle',
-      'gym[box2d,classic_control]',
+      'gym',
       'ipython',
       'ipywidgets',
       'joblib',
