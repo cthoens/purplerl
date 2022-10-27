@@ -374,7 +374,7 @@ class PPO():
             backtrack = False
 
             policy_done = False
-            epoch_kl = abs(kl_total.item() / kl_count).item()
+            epoch_kl = abs_kl_total.item() / abs_kl_count.item()
             # kl_decreased = (epoch_kl < last_epoch_kl and not self.vf_only_update) or
             kl_limit_reached = epoch_kl > self.target_kl
             if kl_limit_reached:

@@ -275,7 +275,10 @@ class Trainer:
         link_name = f"resume.pt"
         link_fname = osp.join(fpath, link_name)
         pathlib.Path(link_fname).unlink(missing_ok=True)
-        os.symlink(dst=link_fname, src=fname)
+        try:
+            os.symlink(dst=link_fname, src=fname)
+        except OSError:
+            pass
 
     def load_checkpoint(self, file):
         checkpoint = torch.load(file)

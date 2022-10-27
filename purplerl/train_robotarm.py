@@ -295,36 +295,44 @@ class RobotArmObsEncoder(torch.nn.Module):
         return obs[:, self.remaining_range]
 
 
-def run(dev_mode:bool = False, resume_lesson: int = None):
-    phase_config = {
-        "phase1": {
-            "new_lesson_warmup_updates": 8,
-            "lesson_timeout_episodes": 80,
-            "initial_lr": 1e-4,
-            "update_epochs" : 5,
-            "discount": 0.95,
-            "adv_lambda": 0.95,
-            "clip_ratio": 0.03,
-            "target_kl": 0.03,
-            "target_vf_decay": 1.0,
-            "lr_decay": 0.90,
-            "action_scaling": 4.0,
-            "entropy_factor": 0.2,
+def run(dev_mode:bool = False, resume_lesson: int = None, resume_checkpoint: str = None):
+    if dev_mode:
+        project_name = "Dev"
+    else:
+        project_name = "RobotArm"
+    if resume_checkpoint:
+        checkpoint_path = os.path.join(f"results", project_name, resume_checkpoint)
+        if not os.path.exists(checkpoint_path):
+            print(f"Checkpoint does not exist: {checkpoint_path}")
+            return;
 
-            "update_batch_size": 20,
-            "update_batch_count": 5,
-            "epochs": 2000,
-            "resume_lesson": resume_lesson,
-        }
+    config = {
+        "new_lesson_warmup_updates": 8,
+        "lesson_timeout_episodes": 80,
+        "initial_lr": 1e-4,
+        "update_epochs" : 5,
+        "discount": 0.95,
+        "adv_lambda": 0.95,
+        "clip_ratio": 0.03,
+        "target_kl": 0.13,
+        "target_vf_decay": 1.0,
+        "lr_decay": 0.90,
+        "action_scaling": 4.0,
+        "entropy_factor": 0.2,
+
+        "update_batch_size": 20,
+        "update_batch_count": 4,
+        "epochs": 2000,
+        "resume_lesson": resume_lesson,
+        "resume_checkpoint": resume_checkpoint
     }
-    active_phase = "phase1"
-    config = phase_config[active_phase]
-    config["phase"] = active_phase
     wandb_mode = "online" if not dev_mode else "disabled"
-    with wandb.init(project="RobotArm", config=config, mode=wandb_mode) as run:
-        project_name = run.project
-        if project_name=="": project_name = "Dev"
-        run_training(project_name, run.name, **wandb.config)
+    with wandb.init(project=project_name, config=config, mode=wandb_mode) as run:
+        trainer = create_trainer(project_name, run.name, **wandb.config)
+        try:
+            trainer.run_training()
+        finally:
+            trainer.env_manager.close()
 
 def create_trainer(
     project_name,
@@ -333,7 +341,6 @@ def create_trainer(
     update_epochs,
     discount: float = 0.95,
     adv_lambda: float = 0.95,
-    phase = "phase1",
     clip_ratio: float = 0.2,
     target_kl: float = 0.15,
     target_vf_decay: float = 1.0,
@@ -347,6 +354,7 @@ def create_trainer(
     update_batch_count: int = 1,
     epochs: int = 3000,
     resume_lesson: int = None,
+    resume_checkpoint: str = None
 ):
     buffer_size = update_batch_size * update_batch_count
 
@@ -420,7 +428,7 @@ def create_trainer(
     )
     wandb.watch((policy, policy_updater.value_net_tail), log='all', log_freq=20)
 
-    out_dir = f"results/{project_name}/{phase}/{exp_name}"
+    out_dir = f"results/{project_name}/{exp_name}"
     trainer = Trainer(
         cfg = cfg,
         env_manager = env_manager,
@@ -436,8 +444,8 @@ def create_trainer(
         #eval_func =
     )
 
-    checkpoint_path = os.path.join(f"results/{project_name}", f"{phase}-resume.pt")
-    if os.path.exists(checkpoint_path):
+    checkpoint_path = os.path.join(f"results", project_name, resume_checkpoint if resume_checkpoint else "")
+    if resume_checkpoint and os.path.exists(checkpoint_path):
         if os.path.islink(checkpoint_path):
             print(f"Resuming from {checkpoint_path}[{os.readlink(checkpoint_path)}]")
         else:
@@ -447,16 +455,13 @@ def create_trainer(
         print("****\n**** Starting from scratch !!!\n****")
     return trainer
 
-def run_training(project_name, exp_name, **kwargs):
-    trainer = create_trainer(project_name, exp_name, **kwargs)
-    trainer.run_training()
-    trainer.env_manager.close()
 
 if __name__ == '__main__':
     import argparse
     parser = argparse.ArgumentParser()
     parser.add_argument('--dev', action='store_true')
     parser.add_argument('--lesson', type=int, default=None)
+    parser.add_argument('--resume', type=str, default=None)
     args = parser.parse_args()
 
     seed = 45632
@@ -467,4 +472,4 @@ if __name__ == '__main__':
     import matplotlib
     matplotlib.use('Agg')
 
-    run(args.dev, args.lesson)
+    run(args.dev, args.lesson, args.resume)
