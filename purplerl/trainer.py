@@ -155,6 +155,13 @@ class Trainer:
 
         has_more_lessons = self.env_manager.set_lesson(self.lesson)
         if has_more_lessons:
+            wandb.alert(
+                title='Next Lesson',
+                text=f'Starting lesson {self.lesson}',
+                level=wandb.AlertLevel.INFO,
+                wait_duration=timedelta(minutes=1)
+            )
+
             print(f"******> Starting lesson {self.lesson}")
         else:
             print(f"Training completed")

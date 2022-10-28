@@ -235,7 +235,7 @@ class RobotArmObsEncoder(torch.nn.Module):
 
         #self.cnn_layers = half_unet_v1(np.array(list(env.training_sensor_space.shape[1:]), np.int32), num_outputs=self.num_obs_outputs)
         self.cnn_layers = resnet18(num_classes=self.num_obs_outputs)
-        self.mlp = mlp([self.num_conv_net_outputs, 1024, 1024, self.num_mlp_outputs], activation=torch.nn.ReLU, output_activation=torch.nn.Identity)
+        self.mlp = mlp([self.num_conv_net_outputs, 4096, 4096, self.num_mlp_outputs], activation=torch.nn.ReLU, output_activation=torch.nn.Identity)
         self.enc_obs_relu = torch.nn.ReLU(inplace=True)
         self.skip_relu = torch.nn.ReLU(inplace=True)
 
@@ -243,7 +243,7 @@ class RobotArmObsEncoder(torch.nn.Module):
             self.num_outputs = 2 * np.prod(env.action_space.shape) + np.prod(env.remaining_space.shape)
             self.out_layer = torch.nn.Linear(self.num_mlp_outputs, self.num_outputs)
         else:
-            self.num_outputs = self.num_obs_outputs
+            self.num_outputs = self.num_mlp_outputs
 
         self.shape: tuple[int, ...] = (self.num_outputs, )
 
@@ -314,11 +314,13 @@ def run(dev_mode:bool = False, resume_lesson: int = None, resume_checkpoint: str
         "discount": 0.95,
         "adv_lambda": 0.95,
         "clip_ratio": 0.03,
-        "target_kl": 0.13,
+        "target_kl": 0.15,
         "target_vf_decay": 1.0,
         "lr_decay": 0.90,
         "action_scaling": 4.0,
         "entropy_factor": 0.2,
+        "max_vf_priority": 20.0,
+        "min_vf_priority": 1.0,
 
         "update_batch_size": 20,
         "update_batch_count": 4,
@@ -347,6 +349,8 @@ def create_trainer(
     lr_decay: float = 0.95,
     action_scaling: float = 2.0,
     entropy_factor: float = 0.0,
+    max_vf_priority: float = 20.0,
+    min_vf_priority: float = 1.0,
 
     lesson_timeout_episodes: int = 80,
     new_lesson_warmup_updates: int = 0,
@@ -370,7 +374,7 @@ def create_trainer(
 
     action_dist_net_output_shape = np.array(env_manager.action_space.shape + (2, ))
     if split_outputs:
-        mlp_sizes = list(obs_encoder.shape) + [64, np.prod(action_dist_net_output_shape)]
+        mlp_sizes = list(obs_encoder.shape) + [1024, np.prod(action_dist_net_output_shape)]
         action_dist_net_tail = mlp(sizes=mlp_sizes)
 
     else:
@@ -402,7 +406,7 @@ def create_trainer(
     )
 
     if split_outputs:
-        value_net_tail = mlp(list(obs_encoder.shape) + [64, 1]).to(cfg.device)
+        value_net_tail = mlp(list(obs_encoder.shape) + [1024, 1]).to(cfg.device)
     else:
         class ValueNetTail(torch.nn.Module):
             def forward(self, enc_obs):
@@ -425,6 +429,8 @@ def create_trainer(
         target_vf_decay = target_vf_decay,
         lr_decay = lr_decay,
         entropy_factor = entropy_factor,
+        max_vf_priority=max_vf_priority,
+        min_vf_priority=min_vf_priority
     )
     wandb.watch((policy, policy_updater.value_net_tail), log='all', log_freq=20)
 

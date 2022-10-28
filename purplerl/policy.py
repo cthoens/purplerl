@@ -168,8 +168,6 @@ class PPO():
     MAX_UPDATE_BALANCE = 1.0
     UPDATE_BALANCE_STEP = 0.001
 
-    MAX_VF_PRIORITY = 20.0
-    MIN_VF_PRIORITY = 1.0
     VF_PRIORITY_STEP = 0.90  # 0.90 => 11 steps from 2.0 to ~1.0; 23 steps to ~0.5
 
     def __init__(self,
@@ -185,7 +183,9 @@ class PPO():
         target_kl: float = 0.15,
         target_vf_decay: float = 0.1,
         lr_decay: float = 0.95,
-        entropy_factor : float = 0.0,
+        entropy_factor: float = 0.0,
+        max_vf_priority: float = 20.0,
+        min_vf_priority: float = 1.0,
         warmup_updates: int = 0
     ) -> None:
         self.cfg = cfg
@@ -202,7 +202,9 @@ class PPO():
         self.lr_decay = lr_decay
         self.entropy_factor = entropy_factor
         self.update_balance = (self.MAX_UPDATE_BALANCE - self.MIN_UPDATE_BALANCE) / 2.0
-        self.vf_priority = self.MAX_VF_PRIORITY
+        self.max_vf_priority = max_vf_priority
+        self.min_vf_priority = min_vf_priority
+        self.vf_priority = max_vf_priority
         self.remaining_warmup_updates = warmup_updates
         self.stats = {}
 
@@ -485,11 +487,11 @@ class PPO():
     def _inc_vf_priority(self):
         decay_revert_steps = 1
         factor = (1.0 / self.VF_PRIORITY_STEP)**(1/decay_revert_steps)
-        self.vf_priority = min(self.vf_priority * factor, self.MAX_VF_PRIORITY)
+        self.vf_priority = min(self.vf_priority * factor, self.max_vf_priority)
 
 
     def _dec_vf_priority(self):
-        self.vf_priority = max(self.vf_priority * self.VF_PRIORITY_STEP, self.MIN_VF_PRIORITY)
+        self.vf_priority = max(self.vf_priority * self.VF_PRIORITY_STEP, self.min_vf_priority)
 
 
     def _stationary_policy_loss(self, logp_old, encoded_obs, act, adv) -> Tuple[torch.tensor, torch.tensor, torch.tensor, torch.tensor]:
