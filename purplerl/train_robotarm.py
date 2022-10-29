@@ -18,11 +18,9 @@ from purplerl.trainer import Trainer
 from purplerl.environment import EnvManager
 from purplerl.policy import ContinuousPolicy, PPO, mlp
 from purplerl.config import GpuConfig
-from purplerl.resnet import resnet18
+from purplerl.resnet_mini import resnet18
 
 cfg = GpuConfig()
-
-split_outputs = False
 
 class RobotArmEnvManager(EnvManager):
     def __init__(self, file_name, action_scaling = 2.0, force_vulkan = True, *, port_ = 6064, seed = 0, timeout_wait = 120):
@@ -218,13 +216,20 @@ class RobotArmEnvManager(EnvManager):
         return obs[:, self.remaining_range].reshape(*([-1] + list(self.remaining_space.shape)))
 
 class RobotArmObsEncoder(torch.nn.Module):
-    def __init__(self, env: RobotArmEnvManager) -> None:
+    def __init__(self,
+        env: RobotArmEnvManager,
+        obs_outputs = 128,
+        planner_net_layers=[4096, 4096],
+        planner_outputs = 1024,
+        planner_skip_connection = True,
+    ) -> None:
         super().__init__()
 
         self.env = env
-        self.num_obs_outputs = 128
+        self.planner_skip_connection = planner_skip_connection
+        self.num_obs_outputs = obs_outputs
         self.num_combined_obs_outputs = 2 * self.num_obs_outputs
-        self.num_mlp_outputs = 2048
+        self.num_outputs = planner_outputs
         self.num_conv_net_outputs = 2 * self.num_obs_outputs + np.prod(env.remaining_space.shape) #+ np.prod(env.joint_angels_space.shape)
 
         self.training_range = range(0, self.num_obs_outputs)
@@ -235,26 +240,18 @@ class RobotArmObsEncoder(torch.nn.Module):
 
         #self.cnn_layers = half_unet_v1(np.array(list(env.training_sensor_space.shape[1:]), np.int32), num_outputs=self.num_obs_outputs)
         self.cnn_layers = resnet18(num_classes=self.num_obs_outputs)
-        self.mlp = mlp([self.num_conv_net_outputs, 4096, 4096, self.num_mlp_outputs], activation=torch.nn.ReLU, output_activation=torch.nn.Identity)
+        self.mlp = mlp([self.num_conv_net_outputs] + planner_net_layers + [self.num_outputs], activation=torch.nn.ReLU, output_activation=torch.nn.Identity)
         self.enc_obs_relu = torch.nn.ReLU(inplace=True)
         self.skip_relu = torch.nn.ReLU(inplace=True)
-
-        if not split_outputs:
-            self.num_outputs = 2 * np.prod(env.action_space.shape) + np.prod(env.remaining_space.shape)
-            self.out_layer = torch.nn.Linear(self.num_mlp_outputs, self.num_outputs)
-        else:
-            self.num_outputs = self.num_mlp_outputs
-
         self.shape: tuple[int, ...] = (self.num_outputs, )
 
     def forward(self, obs: torch.tensor):
         enc_obs = self._forward(obs)
         enc_obs = self.enc_obs_relu(enc_obs)
         out = self.mlp(enc_obs)
-        out[:, :self.num_combined_obs_outputs] += self._training_and_goal_obs(enc_obs)
+        if self.planner_skip_connection:
+            out[:, :self.num_combined_obs_outputs] += self._training_and_goal_obs(enc_obs)
         out = self.skip_relu(out)
-        if not split_outputs:
-            out = self.out_layer(out)
 
         # restore the buffer dimension
         return out
@@ -306,7 +303,7 @@ def run(dev_mode:bool = False, resume_lesson: int = None, resume_checkpoint: str
             print(f"Checkpoint does not exist: {checkpoint_path}")
             return;
 
-    config = {
+    base_config = {
         "new_lesson_warmup_updates": 8,
         "lesson_timeout_episodes": 80,
         "initial_lr": 1e-4,
@@ -319,15 +316,38 @@ def run(dev_mode:bool = False, resume_lesson: int = None, resume_checkpoint: str
         "lr_decay": 0.90,
         "action_scaling": 4.0,
         "entropy_factor": 0.2,
-        "max_vf_priority": 20.0,
+        "max_vf_priority": 4.0,
         "min_vf_priority": 1.0,
 
-        "update_batch_size": 20,
-        "update_batch_count": 4,
+        "update_batch_size":  16,
+        "update_batch_count": 6,
         "epochs": 2000,
         "resume_lesson": resume_lesson,
         "resume_checkpoint": resume_checkpoint
     }
+
+    unified_config = base_config.copy()
+    unified_config.update({
+        "obs_encoder_outputs": 128,
+        "planner_layers": [4096, 2048],
+        "panner_outputs": 4096,
+        "planner_skip_connection": True,
+        "policy_split_layers": [],
+        "value_net_split_layers": [],
+    })
+
+    split_config = base_config.copy()
+    split_config.update({
+        "obs_encoder_outputs": 128,
+        "planner_layers": [4096],
+        "panner_outputs": 2048,
+        "planner_skip_connection": True,
+        "policy_split_layers": [4096],
+        "value_net_split_layers": [4096],
+    })
+
+    config = split_config
+    print(config)
     wandb_mode = "online" if not dev_mode else "disabled"
     with wandb.init(project=project_name, config=config, mode=wandb_mode) as run:
         trainer = create_trainer(project_name, run.name, **wandb.config)
@@ -352,6 +372,13 @@ def create_trainer(
     max_vf_priority: float = 20.0,
     min_vf_priority: float = 1.0,
 
+    obs_encoder_outputs = 128,
+    planner_layers = [4096, 4096],
+    planner_skip_connection = True,
+    panner_outputs = 4096,
+    policy_split_layers = [],
+    value_net_split_layers = [],
+
     lesson_timeout_episodes: int = 80,
     new_lesson_warmup_updates: int = 0,
     update_batch_size: int = 29,
@@ -370,19 +397,18 @@ def create_trainer(
     # TODO Tell wandb about it
     num_envs = env_manager.env_count
 
-    obs_encoder = RobotArmObsEncoder(env_manager)
+    obs_encoder = RobotArmObsEncoder(
+        env_manager,
+
+        obs_outputs= obs_encoder_outputs,
+        planner_net_layers = planner_layers,
+        planner_skip_connection = planner_skip_connection,
+        planner_outputs=panner_outputs
+    )
 
     action_dist_net_output_shape = np.array(env_manager.action_space.shape + (2, ))
-    if split_outputs:
-        mlp_sizes = list(obs_encoder.shape) + [1024, np.prod(action_dist_net_output_shape)]
-        action_dist_net_tail = mlp(sizes=mlp_sizes)
-
-    else:
-        class ActionDistNetTail(torch.nn.Module):
-            def forward(self, enc_obs):
-                assert(enc_obs.shape[1]==11)
-                return enc_obs[:,:10].reshape((-1, np.prod(action_dist_net_output_shape)))
-        action_dist_net_tail = ActionDistNetTail()
+    mlp_sizes = list(obs_encoder.shape) + policy_split_layers + [np.prod(action_dist_net_output_shape)]
+    action_dist_net_tail = mlp(sizes=mlp_sizes)
 
     policy= ContinuousPolicy(
         obs_encoder = obs_encoder,
@@ -405,15 +431,7 @@ def create_trainer(
         }
     )
 
-    if split_outputs:
-        value_net_tail = mlp(list(obs_encoder.shape) + [1024, 1]).to(cfg.device)
-    else:
-        class ValueNetTail(torch.nn.Module):
-            def forward(self, enc_obs):
-                assert(enc_obs.shape[1]==11)
-                return enc_obs[:,-1]
-        value_net_tail = ValueNetTail()
-
+    value_net_tail = mlp(list(obs_encoder.shape) + value_net_split_layers + [1]).to(cfg.device)
     policy_updater = PPO(
         cfg = cfg,
         policy = policy,
