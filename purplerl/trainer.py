@@ -91,58 +91,63 @@ class Trainer:
 
 
     def run_training(self):
-        for self.epoch in range(self.epochs):
-            self.run_epoch()
+        try:
+            for self.epoch in range(self.epochs):
+                self.run_epoch()
 
-            if self.epoch<=1:
-                self.mean_return_ema = self.experience.mean_return()
-            else:
-                self.mean_return_ema = 0.6 * self.experience.mean_return() + 0.4 * self.mean_return_ema
-            self.own_stats[self.MEAN_RETURN_EMA] = self.mean_return_ema
-            lesson_warmup_phase = self.epoch - self.lesson_start_epoch <= self.new_lesson_warmup_updates
-            if lesson_warmup_phase:
-                 self.max_mean_return_epoch = self.epoch + 1
-                 self.max_mean_return = float('-inf')
-            elif self.mean_return_ema > self.max_mean_return:
-                 self.max_mean_return = self.mean_return_ema
-                 self.max_mean_return_epoch = self.epoch
+                if self.epoch<=1:
+                    self.mean_return_ema = self.experience.mean_return()
+                else:
+                    self.mean_return_ema = 0.6 * self.experience.mean_return() + 0.4 * self.mean_return_ema
+                self.own_stats[self.MEAN_RETURN_EMA] = self.mean_return_ema
+                lesson_warmup_phase = self.epoch - self.lesson_start_epoch <= self.new_lesson_warmup_updates
+                if lesson_warmup_phase:
+                    self.max_mean_return_epoch = self.epoch + 1
+                    self.max_mean_return = float('-inf')
+                elif self.mean_return_ema > self.max_mean_return:
+                    self.max_mean_return = self.mean_return_ema
+                    self.max_mean_return_epoch = self.epoch
 
-            lesson_timeout = self.epoch - self.max_mean_return_epoch
-            self.own_stats[self.LESSON_TIMEOUT] = min((self.lesson_timeout_episodes - lesson_timeout) / self.lesson_timeout_episodes, 1.0)
-            lesson_finished = lesson_timeout > self.lesson_timeout_episodes or (self.experience.success_rate() > 0.99 and lesson_timeout > 30)
-            lesson_successfull = self.experience.success_rate()>=0.9
-            if lesson_finished and lesson_successfull:
-                wandb.alert(
-                    title='New lesson',
-                    text=f'Starting lesson {self.lesson +1}',
-                    level=wandb.AlertLevel.INFO,
-                    wait_duration=timedelta(minutes=1)
-                )
-                self.start_lesson(self.lesson + 1)
+                lesson_timeout = self.epoch - self.max_mean_return_epoch
+                self.own_stats[self.LESSON_TIMEOUT] = min((self.lesson_timeout_episodes - lesson_timeout) / self.lesson_timeout_episodes, 1.0)
+                lesson_finished = lesson_timeout > self.lesson_timeout_episodes or (self.experience.success_rate() > 0.99 and lesson_timeout > 30)
+                lesson_successfull = self.experience.success_rate()>=0.9
+                if lesson_finished and lesson_successfull:
+                    wandb.alert(
+                        title='New lesson',
+                        text=f'Starting lesson {self.lesson +1}',
+                        level=wandb.AlertLevel.INFO,
+                        wait_duration=timedelta(minutes=1)
+                    )
+                    self.start_lesson(self.lesson + 1)
 
-            wandb.log(copy.deepcopy(self.all_stats), step=self.epoch)
-            self.log_to_console()
+                wandb.log(copy.deepcopy(self.all_stats), step=self.epoch)
+                self.log_to_console()
 
-            if self.policy_updater.lr_factor < 0.01:
-                wandb.alert(
-                    title='Learning rate collapsed',
-                    text=f'Learning rate collapsed',
-                    level=wandb.AlertLevel.ERROR,
-                    wait_duration=timedelta(minutes=1)
-                )
-                print("Learning rate collapsed")
-                return
+                if self.policy_updater.lr_factor < 0.01:
+                    wandb.alert(
+                        title='Learning rate collapsed',
+                        text=f'Learning rate collapsed',
+                        level=wandb.AlertLevel.ERROR,
+                        wait_duration=timedelta(minutes=1)
+                    )
+                    print("Learning rate collapsed")
+                    return
 
-            if lesson_finished and not lesson_successfull:
-                wandb.alert(
-                    title='Lesson finished unseccessfully',
-                    text=f'Lesson finished unseccessfully',
-                    level=wandb.AlertLevel.ERROR,
-                    wait_duration=timedelta(minutes=1)
-                )
+                if lesson_finished and not lesson_successfull:
+                    wandb.alert(
+                        title='Lesson finished unseccessfully',
+                        text=f'Lesson finished unseccessfully',
+                        level=wandb.AlertLevel.ERROR,
+                        wait_duration=timedelta(minutes=1)
+                    )
 
-                print("Lesson finished unseccessfully")
-                return
+                    print("Lesson finished unseccessfully")
+                    return
+        except KeyboardInterrupt:
+            print("Keyboard interrupt")
+            raise
+
 
     def start_lesson(self, lesson: int):
         self.lesson = lesson
@@ -179,8 +184,15 @@ class Trainer:
         self.epoch += self.resume_epoch
         self.policy_updater.reset()
 
-        # collect experience
-        self._collect_experience()
+        try:
+            # collect experience
+            self._collect_experience()
+        except(KeyboardInterrupt):
+            if self.epoch > 20:
+                fname = f"interrupt{self.epoch-1}.pt"
+                self.save_checkpoint(fname=fname)
+                print(f"--resume {fname}")
+            raise
 
         # train
         update_start_time = time.time()

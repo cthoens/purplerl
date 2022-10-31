@@ -311,13 +311,13 @@ def run(dev_mode:bool = False, resume_lesson: int = None, resume_checkpoint: str
         "discount": 0.95,
         "adv_lambda": 0.95,
         "clip_ratio": 0.03,
-        "target_kl": 0.15,
+        "target_kl": 0.24,
         "target_vf_decay": 1.0,
         "lr_decay": 0.90,
         "action_scaling": 4.0,
         "entropy_factor": 0.2,
         "max_vf_priority": 4.0,
-        "min_vf_priority": 1.0,
+        "min_vf_priority": 4.0,
 
         "update_batch_size":  16,
         "update_batch_count": 6,
@@ -346,7 +346,7 @@ def run(dev_mode:bool = False, resume_lesson: int = None, resume_checkpoint: str
         "value_net_split_layers": [4096],
     })
 
-    config = split_config
+    config = unified_config
     print(config)
     wandb_mode = "online" if not dev_mode else "disabled"
     with wandb.init(project=project_name, config=config, mode=wandb_mode) as run:
