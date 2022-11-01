@@ -428,8 +428,13 @@ class PPO():
                 self.vf_priority = vf_priority_backup
 
                 #Note: No need to backup the lr across the roll back, since this overwrites it
-                if update_epoch <= 3: # => if update 0, 1 or 2 is rolled back, decrease the rl
+                early_backtrack = update_epoch <= 3    # => if update 0, 1 or 2 is rolled back, decrease the rl
+                if early_backtrack:
                     self._dec_lr_factor()
+
+                rollback_increase = update_epoch >= 5   # => if the lr we previously increased in this update roll back the increase
+                if rollback_increase:
+                    self._rollback_inc_lr_factor()
 
                 return not is_after_first_update
 
@@ -471,8 +476,21 @@ class PPO():
 
     def _inc_lr_factor(self):
         # find factor such that applying applying it decay_revert_steps times reverts one decay step
-        decay_revert_steps = 2
+        decay_revert_steps = 3
         factor = (1.0 / self.lr_decay)**(1/decay_revert_steps)
+
+        self.lr_factor *= factor
+        lr = self.initial_lr * self.lr_factor
+        print(f"====> {self.lr_factor:.4f}  /  {self.vf_priority:.4f}")
+        for group in self.optimizer.param_groups:
+            group['lr'] = lr
+
+
+    def _rollback_inc_lr_factor(self):
+        # find factor such that applying applying it decay_revert_steps times reverts one decay step
+        decay_revert_steps = 3
+        factor = (1.0 / self.lr_decay)**(1/decay_revert_steps)
+        factor = 1.0 / factor
 
         self.lr_factor *= factor
         lr = self.initial_lr * self.lr_factor

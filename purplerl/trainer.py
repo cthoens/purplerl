@@ -189,7 +189,7 @@ class Trainer:
             self._collect_experience()
         except(KeyboardInterrupt):
             if self.epoch > 20:
-                fname = f"interrupt{self.epoch-1}.pt"
+                fname = osp.join(self.output_dir, f"interrupt{self.epoch-1}.pt")
                 self.save_checkpoint(fname=fname)
                 print(f"--resume {fname}")
             raise
@@ -285,14 +285,13 @@ class Trainer:
             "trainer": self.checkpoint()
         }
 
-        fpath = self.output_dir
         if not fname:
             fname = f"checkpoint{self.epoch}.pt"
-        os.makedirs(fpath, exist_ok=True)
-        torch.save(full_state, osp.join(fpath, fname))
+        os.makedirs(self.output_dir, exist_ok=True)
+        torch.save(full_state, osp.join(self.output_dir, fname))
 
         link_name = f"resume.pt"
-        link_fname = osp.join(fpath, link_name)
+        link_fname = osp.join(self.output_dir, link_name)
         pathlib.Path(link_fname).unlink(missing_ok=True)
         try:
             os.symlink(dst=link_fname, src=fname)
