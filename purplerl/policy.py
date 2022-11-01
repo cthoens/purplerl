@@ -153,9 +153,6 @@ class PPO():
     KL_MEAN = "KL"
     KL_STD = "KL Std"
     KL_MAX = "KL Max"
-    ABS_KL_MEAN = "Abs. KL"
-    ABS_KL_STD = "Abs. KL Std"
-    ABS_KL_MAX = "Abs. KL Max"
     POLICY_EPOCHS = "Policy Epochs"
     VF_EPOCHS = "VF Epochs"
     UPDATE_BALANCE = "Update Balance"
@@ -260,7 +257,7 @@ class PPO():
 
 
     def update(self):
-        for _ in range(self.update_epochs):
+        for _ in range(3):
             if self._do_update():
                 if self.remaining_warmup_updates>0:
                     print(f"* {self.remaining_warmup_updates}", end=None)
@@ -382,11 +379,10 @@ class PPO():
 
             policy_done = False
             epoch_kl = self.kl
-            epoch_abs_kl = torch.abs(epoch_kl)
-            epoch_abs_kl_mean = epoch_abs_kl.mean().item()
-            epoch_abs_kl_std = epoch_abs_kl.std().item()
+            epoch_kl_mean = epoch_kl.mean().item()
+            epoch_kl_std = epoch_kl.std().item()
             # kl_decreased = (epoch_kl < last_epoch_kl and not self.vf_only_update) or
-            kl_limit_reached = epoch_abs_kl_mean + epoch_abs_kl_std> self.target_kl
+            kl_limit_reached = epoch_kl_mean + epoch_kl_std > self.target_kl
             if kl_limit_reached:
                 print("->", end="")
                 self.stats[self.BACKTRACK_POLICY] = 1.0
@@ -395,7 +391,7 @@ class PPO():
             else:
                 print("  ", end="")
 
-            print(f"{epoch_abs_kl_mean + epoch_abs_kl_std:.4f} ", end="")
+            print(f"{epoch_kl_mean + epoch_kl_std:.4f} ", end="")
 
             vf_done = False
             epoch_value_loss = self.value
@@ -448,12 +444,9 @@ class PPO():
 
             if not is_first_epoch:
                 self.stats[self.POLICY_EPOCHS] += 1
-                self.stats[self.KL_MEAN] = epoch_kl.mean().item()
-                self.stats[self.KL_STD] = epoch_kl.std().item()
+                self.stats[self.KL_MEAN] = epoch_kl_mean
+                self.stats[self.KL_STD] = epoch_kl_std
                 self.stats[self.KL_MAX] = epoch_kl.max().item()
-                self.stats[self.ABS_KL_MEAN] = epoch_abs_kl_mean
-                self.stats[self.ABS_KL_STD] = epoch_abs_kl_std
-                self.stats[self.ABS_KL_MAX] = epoch_abs_kl.max().item()
                 if clip_factor_count != 0:
                     self.stats[self.POLICY_LOSS] = policy_loss_total.item() / policy_loss_count.item()
                     self.stats[self.CLIP_FACTOR] = clip_factor_total.item() / clip_factor_count.item()

@@ -311,7 +311,7 @@ def run(dev_mode:bool = False, resume_lesson: int = None, resume_checkpoint: str
         "discount": 0.95,
         "adv_lambda": 0.95,
         "clip_ratio": 0.03,
-        "target_kl": 0.24,
+        "target_kl": 0.15,
         "target_vf_decay": 1.0,
         "lr_decay": 0.90,
         "action_scaling": 4.0,
