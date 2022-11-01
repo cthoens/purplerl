@@ -189,9 +189,9 @@ class Trainer:
             self._collect_experience()
         except(KeyboardInterrupt):
             if self.epoch > 20:
-                fname = osp.join(self.output_dir, f"interrupt{self.epoch-1}.pt")
+                fname = f"interrupt{self.epoch-1}.pt"
                 self.save_checkpoint(fname=fname)
-                print(f"--resume {fname}")
+                print(f"--resume {osp.join(self.output_dir, fname)}")
             raise
 
         # train

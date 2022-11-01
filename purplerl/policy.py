@@ -432,7 +432,7 @@ class PPO():
                 if early_backtrack:
                     self._dec_lr_factor()
 
-                rollback_increase = update_epoch >= 5   # => if the lr we previously increased in this update roll back the increase
+                rollback_increase = update_epoch >= 4   # => if the lr we previously increased in this update roll back the increase
                 if rollback_increase:
                     self._rollback_inc_lr_factor()
 
@@ -464,10 +464,10 @@ class PPO():
                 self.stats[self.VALUE_LOSS_IN_STD] = epoch_value_loss.std().item()
                 self.stats[self.VALUE_LOSS_IN_MAX] = epoch_value_loss.max().item()
 
-            if update_epoch >= 4: # If update 0, 1, 2, and 3 have been successfull, increase lr for update 4 and above
-                self._inc_lr_factor()
-
             if not is_validate_epoch:
+                if update_epoch >= 3: # If update 0, 1, 2 have been successfull, increase lr for update 3 and above
+                    self._inc_lr_factor()
+
                 cp = self._full_checkpoint()
                 self.optimizer.step()
 
