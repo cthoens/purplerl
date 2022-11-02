@@ -9,8 +9,9 @@ import torch.nn as nn
 from torch.distributions.categorical import Categorical
 from torch.distributions.normal import Normal
 from torch.utils.data import TensorDataset, DataLoader
-
 from torch.optim import Adam
+from torch import autocast
+from torch.cuda.amp import GradScaler
 
 from purplerl.experience_buffer import ExperienceBuffer, discount_cumsum
 import purplerl.config as config
@@ -216,6 +217,7 @@ class PPO():
             {'params': self.policy.action_dist_net_tail.parameters(), 'lr': self.initial_lr},
             {'params': self.value_net_tail.parameters(), 'lr': self.initial_lr}
         ])
+        self.scaler = GradScaler()
 
 
         # The extra slot at the end of used in _finish_env_path().
@@ -298,74 +300,77 @@ class PPO():
             totals[...] = 0.0
             counts[...] = 0
             self.optimizer.zero_grad(set_to_none=True)
+
             for obs, act, adv, logp_old, discounted_reward in zip(self.obs_loader, self.action_loader, self.weight_loader, self.logp_old_loader, self.discounted_reward_loader):
-                assert(obs[0].shape[0] == self.update_batch_size)
-                batch_range = range(batch_start, batch_start+self.update_batch_size)
-                batch_start += self.update_batch_size
+                with autocast(device_type='cuda', dtype=torch.float16):
+                    assert(obs[0].shape[0] == self.update_batch_size)
+                    batch_range = range(batch_start, batch_start+self.update_batch_size)
+                    batch_start += self.update_batch_size
 
-                # Prepare dataset
-                # ---------------
+                    # Prepare dataset
+                    # ---------------
 
-                obs = obs[0].to(self.cfg.device, non_blocking=True)
-                act = act[0].to(self.cfg.device, non_blocking=True)
-                adv = adv[0].to(self.cfg.device, non_blocking=True)
-                encoded_obs = self.policy.obs_encoder(obs)
-                del obs
+                    obs = obs[0].to(self.cfg.device, non_blocking=True)
+                    act = act[0].to(self.cfg.device, non_blocking=True)
+                    adv = adv[0].to(self.cfg.device, non_blocking=True)
+                    encoded_obs = self.policy.obs_encoder(obs)
+                    del obs
 
-                if is_first_epoch:
-                    # Calculate the pre-update log probs. This is done here to reuse the obs that are already encoded
-                    with torch.no_grad():
-                        logp_old = self.policy.action_dist(encoded_obs=encoded_obs).log_prob(act).sum(-1)
-                        self.logp_old_merged[batch_range] = logp_old.cpu()
-                else:
-                    logp_old = logp_old[0].to(self.cfg.device)
+                    if is_first_epoch:
+                        # Calculate the pre-update log probs. This is done here to reuse the obs that are already encoded
+                        with torch.no_grad():
+                            logp_old = self.policy.action_dist(encoded_obs=encoded_obs).log_prob(act).sum(-1)
+                            self.logp_old_merged[batch_range] = logp_old.cpu()
+                    else:
+                        logp_old = logp_old[0].to(self.cfg.device)
 
-                # Policy update
-                # -------------
-                # Note: Calculdate even if update_policy == False to check for passive_policy_progression (see below)
+                    # Policy update
+                    # -------------
+                    # Note: Calculdate even if update_policy == False to check for passive_policy_progression (see below)
 
-                #if self.remaining_warmup_updates > 0:
-                #   batch_policy_loss, kl, clip_factor, entropy = self._stationary_policy_loss(logp_old, encoded_obs, act, adv)
-                #else:
-                batch_policy_loss, kl, clip_factor, entropy = self._policy_loss(logp_old, encoded_obs, act, adv)
+                    #if self.remaining_warmup_updates > 0:
+                    #   batch_policy_loss, kl, clip_factor, entropy = self._stationary_policy_loss(logp_old, encoded_obs, act, adv)
+                    #else:
+                    batch_policy_loss, kl, clip_factor, entropy = self._policy_loss(logp_old, encoded_obs, act, adv)
 
-                self.kl_merged[batch_range] = kl.detach().cpu()
-                policy_loss_total += batch_policy_loss.sum().detach()
-                policy_loss_count += np.prod(batch_policy_loss.shape).item()
-                clip_factor_total += clip_factor.sum().detach()
-                clip_factor_count += np.prod(clip_factor.shape).item()
+                    self.kl_merged[batch_range] = kl.detach().cpu()
+                    policy_loss_total += batch_policy_loss.sum().detach()
+                    policy_loss_count += np.prod(batch_policy_loss.shape).item()
+                    clip_factor_total += clip_factor.sum().detach()
+                    clip_factor_count += np.prod(clip_factor.shape).item()
 
-                batch_policy_loss = batch_policy_loss.mean()
+                    batch_policy_loss = batch_policy_loss.mean()
 
-                # free up memory for the value function update
-                del kl
-                del clip_factor
-                del act
-                del adv
-                del logp_old
+                    # free up memory for the value function update
+                    del kl
+                    del clip_factor
+                    del act
+                    del adv
+                    del logp_old
 
-                # Value function update
-                # ---------------------
-                # Note: Calculdate stats even if update_vf == False to check for passive_vf_progression (see below)
+                    # Value function update
+                    # ---------------------
+                    # Note: Calculdate stats even if update_vf == False to check for passive_vf_progression (see below)
 
-                discounted_reward = discounted_reward[0].to(self.cfg.device, non_blocking=True)
-                batch_value_loss = self._value_loss(encoded_obs, discounted_reward)
-                del discounted_reward
-                del encoded_obs
+                    discounted_reward = discounted_reward[0].to(self.cfg.device, non_blocking=True)
+                    batch_value_loss = self._value_loss(encoded_obs, discounted_reward)
+                    del discounted_reward
+                    del encoded_obs
 
-                self.value_merged[batch_range] = batch_value_loss.detach().cpu()
-                batch_value_loss = batch_value_loss.mean()
+                    self.value_merged[batch_range] = batch_value_loss.detach().cpu()
+                    batch_value_loss = batch_value_loss.mean()
 
 
-                # Backward pass
-                # -------------
+                    # Backward pass
+                    # -------------
 
-                #vf_loss_factor = torch.abs(batch_policy_loss.detach() / batch_value_loss.detach())
-                vf_loss_factor = self.vf_priority
+                    #vf_loss_factor = torch.abs(batch_policy_loss.detach() / batch_value_loss.detach())
+                    vf_loss_factor = self.vf_priority
 
-                loss = batch_policy_loss + vf_loss_factor * batch_value_loss  + self.entropy_factor * entropy.mean()
+                    loss = batch_policy_loss + vf_loss_factor * batch_value_loss  + self.entropy_factor * entropy.mean()
+
                 if not is_validate_epoch:
-                    loss.backward()
+                    self.scaler.scale(loss).backward()
 
                 del batch_policy_loss
                 del batch_value_loss
@@ -462,7 +467,8 @@ class PPO():
                     self._inc_lr_factor()
 
                 cp = self._full_checkpoint()
-                self.optimizer.step()
+                self.scaler.step(self.optimizer)
+                self.scaler.update()
 
         return True
 
@@ -589,6 +595,7 @@ class PPO():
         return {
             'value_net_state_dict': {k: v.cpu() for k, v in self.value_net_tail.state_dict().items()},
             'optimizer_state_dict': self.optimizer.state_dict(),
+            "scaler_state_dict": self.scaler.state_dict(),
             'initial_lr': self.initial_lr,
             'lr_factor': self.lr_factor,
             'update_balance': self.update_balance,
@@ -601,6 +608,7 @@ class PPO():
     def load_checkpoint(self, checkpoint):
         self.value_net_tail.load_state_dict(checkpoint['value_net_state_dict'])
         self.optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
+        self.scaler.load_state_dict(checkpoint['scaler_state_dict'])
         self.initial_lr = checkpoint['initial_lr']
         self.lr_factor = checkpoint['lr_factor']
         self.update_balance = checkpoint['update_balance']
