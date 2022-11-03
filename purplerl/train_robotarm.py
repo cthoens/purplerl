@@ -310,7 +310,7 @@ def run(dev_mode:bool = False, resume_lesson: int = None, resume_checkpoint: str
         "update_epochs" : 5,
         "discount": 0.95,
         "adv_lambda": 0.95,
-        "clip_ratio": 0.06,
+        "clip_ratio": 0.03,
         "target_kl": 0.12,
         "target_vf_decay": 1.0,
         "lr_decay": 0.90,
@@ -389,7 +389,7 @@ def create_trainer(
 ):
     buffer_size = update_batch_size * update_batch_count
 
-    save_freq = 50
+    save_freq = 100
 
     file_name = "../env_build/RobotArm.x86_64"
     env_manager= RobotArmEnvManager(file_name, action_scaling = action_scaling)
