@@ -55,6 +55,7 @@ class Trainer:
         self.epoch=0
         self.save_freq=save_freq
         self.lesson = 0
+        self.mix_lessons = False
         self.lesson_start_epoch = 0
         self.lesson_timeout_episodes = lesson_timeout_episodes
         self.resume_lesson = resume_lesson
@@ -96,9 +97,9 @@ class Trainer:
                 self.run_epoch()
 
                 if self.epoch<=1:
-                    self.mean_return_ema = self.experience.mean_return()
+                    self.mean_return_ema = self.experience.partial_mean_return()
                 else:
-                    self.mean_return_ema = 0.6 * self.experience.mean_return() + 0.4 * self.mean_return_ema
+                    self.mean_return_ema = 0.6 * self.experience.partial_mean_return() + 0.4 * self.mean_return_ema
                 self.own_stats[self.MEAN_RETURN_EMA] = self.mean_return_ema
                 lesson_warmup_phase = self.epoch - self.lesson_start_epoch <= self.new_lesson_warmup_updates
                 if lesson_warmup_phase:
@@ -108,10 +109,12 @@ class Trainer:
                     self.max_mean_return = self.mean_return_ema
                     self.max_mean_return_epoch = self.epoch
 
+                if self.experience.success_rate() > 0.5:
+                    self.mix_lessons = True
                 lesson_timeout = self.epoch - self.max_mean_return_epoch
                 self.own_stats[self.LESSON_TIMEOUT] = min((self.lesson_timeout_episodes - lesson_timeout) / self.lesson_timeout_episodes, 1.0)
-                lesson_finished = lesson_timeout > self.lesson_timeout_episodes or (self.experience.success_rate() > 0.99 and lesson_timeout > 30)
-                lesson_successfull = self.experience.success_rate()>=0.9
+                lesson_finished = lesson_timeout > self.lesson_timeout_episodes or (self.experience.partial_success_rate() > 0.99 and lesson_timeout > 30)
+                lesson_successfull = self.experience.partial_success_rate()>=0.9
                 if lesson_finished and lesson_successfull:
                     wandb.alert(
                         title='New lesson',
@@ -156,6 +159,7 @@ class Trainer:
         self.max_mean_return = float('-inf')
         self.max_mean_return_epoch = self.epoch + 1
         self.own_stats[self.LESSON] = self.lesson
+        self.mix_lessons = False
         self.save_checkpoint(f"lesson {self.lesson}.pt")
 
         has_more_lessons = self.env_manager.set_lesson(self.lesson)
@@ -235,6 +239,8 @@ class Trainer:
         self.policy_updater.value_net_tail.requires_grad_(False)
         try:
             obs = torch.as_tensor(self.env_manager.reset(), **self.cfg.tensor_args)
+            self.env_manager.set_lesson(self.lesson)
+            self.experience.update_partial_stats = True
             for step, _ in enumerate(range(self.experience.buffer_size)):
                 decision_time = time.time()
                 encoded_obs = self.policy.obs_encoder(obs)
@@ -256,6 +262,11 @@ class Trainer:
                 self.experience.end_episode(done, success)
                 self.timig_stats[self.EXPERIENCE_TIME] += time.time() - experience_time
                 obs = next_obs
+
+                done_percent = float(step) / float(self.experience.buffer_size)
+                if self.mix_lessons and done_percent > 0.7:
+                    self.experience.update_partial_stats = False
+                    self.env_manager.set_lesson(self.lesson+2)
 
             experience_time = time.time()
             encoded_obs = self.policy.obs_encoder(obs)
@@ -282,7 +293,8 @@ class Trainer:
         full_state = {
             "policy": self.policy.checkpoint(),
             "policy_updater": self.policy_updater.checkpoint(),
-            "trainer": self.checkpoint()
+            "trainer": self.checkpoint(),
+            "mix_lessons": self.mix_lessons,
         }
 
         if not fname:
@@ -304,6 +316,7 @@ class Trainer:
         self.policy_updater.load_checkpoint(checkpoint["policy_updater"])
         trainer_state = checkpoint["trainer"]
         self.resume_epoch = trainer_state.get(self.EPOCH, 0)+1
+        self.mix_lessons = trainer_state.get("mix_lessons", self.mix_lessons)
 
         if self.resume_lesson is None:
             self.lesson = trainer_state.get(self.LESSON, 0)

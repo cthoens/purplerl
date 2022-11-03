@@ -26,6 +26,8 @@ class ExperienceBuffer:
     MEAN_RETURN = "Mean Return"
     DISC_REWARD = "Disc Reward"
     SUCCESS_RATE = "Success Rate"
+    PARTIAL_SUCCESS_RATE = "Part. Success Rate"
+    PARTIAL_MEAN_RETURN = "Part. Mean Return"
     EPISODE_COUNT = "Ep Count"
 
     def __init__(self,
@@ -43,8 +45,10 @@ class ExperienceBuffer:
         self.tensor_args = tensor_args
         self.stats = {
             self.MEAN_RETURN: 0.0,
+            self.PARTIAL_MEAN_RETURN: 0.0,
             self.DISC_REWARD: 0.0,
             self.SUCCESS_RATE: 0.0,
+            self.PARTIAL_SUCCESS_RATE: 0.0,
             self.EPISODE_COUNT: 0
         }
 
@@ -54,6 +58,12 @@ class ExperienceBuffer:
         self.ep_success_count = 0 # Number of successfully completed episodes
         self.ep_success_info_count = 0 # Number of times we have received info about success of failure of an episode
         self.ep_return =  np.zeros(num_envs * buffer_size, dtype=np.float32)
+
+        self.update_partial_stats = True
+        self.ep_partial_success_count = 0
+        self.ep_partial_success_info_count = 0
+        self.ep_partial_return_count = 0
+        self.ep_partial_return_info_count = 0
 
         # Per bach data
         self.ep_start_index = np.zeros(num_envs, dtype=np.int32)
@@ -96,11 +106,22 @@ class ExperienceBuffer:
 
             # Stats for finished episode
             self.ep_return[self.ep_count] = self.ep_cum_reward[env_idx]
+            if self.update_partial_stats:
+                self.ep_partial_return_info_count += 1
+                self.ep_partial_return_count += self.ep_cum_reward[env_idx].item()
+                self.stats[self.PARTIAL_MEAN_RETURN] = self.partial_mean_return()
+
             if success is not None:
                 self.ep_success_info_count += 1
                 if success[env_idx]:
                     self.ep_success_count += 1.0
                 self.stats[self.SUCCESS_RATE] = self.success_rate()
+
+                if self.update_partial_stats:
+                    self.ep_partial_success_info_count += 1
+                    if success[env_idx]:
+                        self.ep_partial_success_count += 1.0
+                    self.stats[self.PARTIAL_SUCCESS_RATE] = self.partial_success_rate()
 
             # Reset for next episode
             self.ep_start_index[env_idx] = self.next_step_index
@@ -139,6 +160,10 @@ class ExperienceBuffer:
         self.ep_count = 0
         self.ep_success_count = 0
         self.ep_success_info_count = 0
+        self.ep_partial_success_count = 0
+        self.ep_partial_success_info_count = 0
+        self.ep_partial_return_count = 0
+        self.ep_partial_return_info_count = 0
         self.next_step_index = 0
         self.ep_start_index[...] = 0.0
         self.ep_cum_reward[...] = 0.0
@@ -156,11 +181,26 @@ class ExperienceBuffer:
         self.stats[self.SUCCESS_RATE] = 0
         self.stats[self.EPISODE_COUNT] = 0
 
+
     def mean_return(self) -> float:
         return self.ep_return[:self.ep_count].mean().item()
+
 
     def mean_disc_reward(self) -> float:
         return self.discounted_reward.mean().item()
 
+
     def success_rate(self) -> float:
         return self.ep_success_count / self.ep_success_info_count
+
+
+    def partial_success_rate(self) -> float:
+        if self.ep_partial_success_info_count==0:
+            return 0
+        return self.ep_partial_success_count / self.ep_partial_success_info_count
+
+
+    def partial_mean_return(self) -> float:
+        if self.ep_partial_return_info_count==0:
+            return -1.0
+        return self.ep_partial_return_count / self.ep_partial_return_info_count
