@@ -98,7 +98,7 @@ class Trainer:
                 if self.epoch<=1:
                     self.mean_return_ema = self.experience.mean_return()
                 else:
-                    self.mean_return_ema = 0.6 * self.experience.mean_return() + 0.4 * self.mean_return_ema
+                    self.mean_return_ema = 0.4 * self.experience.mean_return() + 0.6 * self.mean_return_ema
                 self.own_stats[self.MEAN_RETURN_EMA] = self.mean_return_ema
                 lesson_warmup_phase = self.epoch - self.lesson_start_epoch <= self.new_lesson_warmup_updates
                 if lesson_warmup_phase:

@@ -251,9 +251,9 @@ class PPO():
             return
 
         if self.experience.success_rate() > 0.5:
-            self.weight[self.experience.success] *= (1.0 - self.experience.success_rate()) * 2
+            self.weight[self.experience.success] *= max((1.0 - self.experience.success_rate()) * 2.0, 0.25)
         else:
-            self.weight[torch.logical_not(self.experience.success)] *= self.experience.success_rate() * 2
+            self.weight[torch.logical_not(self.experience.success)] *= max(self.experience.success_rate() * 2.0, 0.25)
 
 
     def update(self):
@@ -469,7 +469,7 @@ class PPO():
 
     def _inc_lr_factor(self):
         # find factor such that applying applying it decay_revert_steps times reverts one decay step
-        decay_revert_steps = 3
+        decay_revert_steps = 5
         factor = (1.0 / self.lr_decay)**(1/decay_revert_steps)
 
         self.lr_factor *= factor

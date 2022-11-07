@@ -329,7 +329,7 @@ def run(dev_mode:bool = False, resume_lesson: int = None, resume_checkpoint: str
     unified_config = base_config.copy()
     unified_config.update({
         "obs_encoder_outputs": 128,
-        "planner_layers": [4096, 2048],
+        "planner_layers": [4096, 2048, 2048],
         "panner_outputs": 4096,
         "planner_skip_connection": True,
         "policy_split_layers": [],
