@@ -163,4 +163,7 @@ class ExperienceBuffer:
         return self.discounted_reward.mean().item()
 
     def success_rate(self) -> float:
+        if self.ep_success_info_count == 0:
+            return 0
+
         return self.ep_success_count / self.ep_success_info_count

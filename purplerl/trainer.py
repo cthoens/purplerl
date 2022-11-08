@@ -86,7 +86,8 @@ class Trainer:
         }
         self.console_stats = {
             self.EXPERIENCE: self.experience.stats,
-            self.POLICY: self.policy_updater.stats
+            self.POLICY: self.policy_updater.stats,
+            self.TIMING: self.timig_stats
         }
 
 
@@ -229,7 +230,7 @@ class Trainer:
         self.experience.reset()
         self.timig_stats[self.ENV_TIME] += time.time() - env_time
 
-        num_actions = np.prod(self.env_manager.action_space.shape)
+        num_actions = np.prod(self.env_manager.action_shape)
         action_mean_entropy = torch.empty(self.experience.buffer_size, self.experience.num_envs, num_actions, dtype=torch.float32)
         self.policy.requires_grad_(False)
         self.policy_updater.value_net_tail.requires_grad_(False)

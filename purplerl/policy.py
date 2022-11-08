@@ -89,7 +89,7 @@ class CategoricalPolicy(StochasticPolicy):
 class ContinuousPolicy(StochasticPolicy):
     def __init__(self,
         obs_encoder: torch.nn.Module,
-        action_space: list[int],
+        action_shape: list[int],
         action_dist_net_tail: list[int],
         mean_offset: torch.tensor = None,
         min_std: torch.tensor = None,
@@ -97,8 +97,8 @@ class ContinuousPolicy(StochasticPolicy):
         std_scale = 2.0
     ) -> None:
         super().__init__(obs_encoder)
-        self.action_dist_net_output_shape = action_space.shape + (2, )
-        self.action_shape = action_space.shape
+        self.action_dist_net_output_shape = tuple(action_shape) + (2,)
+        self.action_shape = action_shape
         self.mean_offset = mean_offset if mean_offset is not None else torch.zeros(*self.action_shape)
         self.std_scale = std_scale
         self.min_std = min_std if min_std is not None else torch.zeros(*self.action_shape)

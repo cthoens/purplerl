@@ -1,6 +1,7 @@
 import os
 
 import random
+from typing import Tuple
 import numpy as np
 import torch
 
@@ -10,8 +11,6 @@ from mlagents_envs.side_channel.stats_side_channel import StatsSideChannel
 from mlagents_envs.side_channel.environment_parameters_channel import EnvironmentParametersChannel
 from mlagents_envs.side_channel.engine_configuration_channel import EngineConfigurationChannel
 from mlagents_envs.environment import UnityEnvironment, ActionTuple
-
-from gym.spaces import Box
 
 from purplerl.experience_buffer import ExperienceBuffer
 from purplerl.trainer import Trainer
@@ -76,29 +75,28 @@ class RobotArmEnvManager(EnvManager):
 
         # TODO: Fix channels
         # Channels are the last dimension, but torch needs them to be the first dimension
-        self.training_sensor_space = Box(float("-inf"), float("inf"), (1, ) + self.trainingSpec.shape[:-1])
-        self.goal_sensor_space = Box(float("-inf"), float("inf"), (1, ) + self.goalSpec.shape[:-1])
-        #self.joint_angels_space = Box(float("-inf"), float("inf"), self.jointPosSpec.shape)
-        self.remaining_space = Box(float("-inf"), float("inf"), self.remainigSpec.shape)
-        #self.goal_angels_space = Box(float("-inf"), float("inf"), self.goalPosSpec.shape)
+        self.training_sensor_shape = (1, ) + self.trainingSpec.shape[:-1]
+        self.goal_sensor_shape = (1, ) + self.goalSpec.shape[:-1]
+        #self.joint_angels_shape = self.jointPosSpec.shape
+        self.remaining_shape = self.remainigSpec.shape
+        #self.goal_angels_shape = self.goalPosSpec.shape
 
-        self.training_range = range(0, np.prod(self.training_sensor_space.shape))
-        self.goal_range = range(self.training_range.stop, self.training_range.stop + np.prod(self.goal_sensor_space.shape))
-        #self.joint_pos_range = range(self.goal_range.stop, self.goal_range.stop + np.prod(self.joint_angels_space.shape))
-        self.remaining_range = range(self.goal_range.stop, self.goal_range.stop + np.prod(self.remaining_space.shape))
-        #self.goal_angles_range = range(self.remaining_range.stop, self.remaining_range.stop + np.prod(self.goal_angels_space.shape))
+        self.training_range = range(0, np.prod(self.training_sensor_shape))
+        self.goal_range = range(self.training_range.stop, self.training_range.stop + np.prod(self.goal_sensor_shape))
+        #self.joint_pos_range = range(self.goal_range.stop, self.goal_range.stop + np.prod(self.joint_angels_shape))
+        self.remaining_range = range(self.goal_range.stop, self.goal_range.stop + np.prod(self.remaining_shape))
+        #self.goal_angles_range = range(self.remaining_range.stop, self.remaining_range.stop + np.prod(self.goal_angels_shape))
 
         obs_length = (
-                np.prod(np.array(self.training_sensor_space.shape)) +
-                np.prod(np.array(self.goal_sensor_space.shape)) +
-                #np.prod(np.array(self.joint_angels_space.shape)) +
-                np.prod(np.array(self.remaining_space.shape))
-                #np.prod(np.array(self.goal_angels_space.shape))
+                np.prod(np.array(self.training_sensor_shape)) +
+                np.prod(np.array(self.goal_sensor_shape)) +
+                #np.prod(np.array(self.joint_angels_shape)) +
+                np.prod(np.array(self.remaining_shape))
+                #np.prod(np.array(self.goal_angels_shape))
             ).item()
 
-        self.observation_space = Box(float("-1"), float("1"), (obs_length, ))
-
-        self.action_space = Box(float("-inf"), float("inf"), (5, ))
+        self.observation_shape = [obs_length]
+        self.action_shape = [5]
 
         self.set_lesson(0)
         self.config_channel.set_configuration_parameters(time_scale=10, target_frame_rate=10, capture_frame_rate=10)
@@ -135,7 +133,7 @@ class RobotArmEnvManager(EnvManager):
 
 
     def update_obs_stats(self, experience:ExperienceBuffer):
-        #num_actions = np.prod(self.action_space.shape)
+        #num_actions = np.prod(self.action_shape)
 
         #mean_joint_anges = self._joint_angles(experience.obs_merged).mean(-1)
         #std_joint_anges = self._joint_angles(experience.obs_merged).std(-1)
@@ -197,23 +195,23 @@ class RobotArmEnvManager(EnvManager):
 
 
     def _training_obs(self, obs: torch.tensor):
-        return obs[:, self.training_range].reshape(*([-1] + list(self.training_sensor_space.shape)))
+        return obs[:, self.training_range].reshape(*((-1, ) + self.training_sensor_shape))
 
 
     def _goal_obs(self, obs: torch.tensor):
-        return obs[:, self.goal_range].reshape(*([-1] + list(self.goal_sensor_space.shape)))
+        return obs[:, self.goal_range].reshape(*((-1,) + self.goal_sensor_shape))
 
 
     #def _joint_angles(self, obs: torch.tensor):
-    #    return obs[:, self.joint_pos_range].reshape(*([-1] + list(self.joint_angels_space.shape)))
+    #    return obs[:, self.joint_pos_range].reshape(*((-1, ) + list(self.joint_angels_shape)))
 
 
     #def _goal_angles(self, obs: torch.tensor):
-    #    return obs[:, self.goal_angles_range].reshape(*([-1] + list(self.goal_angels_space.shape)))
+    #    return obs[:, self.goal_angles_range].reshape(*((-1, )  + list(self.goal_angels_shape)))
 
 
     def _remaining(self, obs: torch.tensor):
-        return obs[:, self.remaining_range].reshape(*([-1] + list(self.remaining_space.shape)))
+        return obs[:, self.remaining_range].reshape(*((-1, )  + self.remaining_shape))
 
 class RobotArmObsEncoder(torch.nn.Module):
     def __init__(self,
@@ -230,17 +228,18 @@ class RobotArmObsEncoder(torch.nn.Module):
         self.num_obs_outputs = obs_outputs
         self.num_combined_obs_outputs = 2 * self.num_obs_outputs
         self.num_outputs = planner_outputs
-        self.num_conv_net_outputs = 2 * self.num_obs_outputs + np.prod(env.remaining_space.shape) #+ np.prod(env.joint_angels_space.shape)
+        self.num_extra_inputs = np.prod(env.remaining_shape) #+ np.prod(env.joint_angels_shape)
+        self.num_planner_net_inputs = 2 * self.num_obs_outputs + self.num_extra_inputs
 
         self.training_range = range(0, self.num_obs_outputs)
         self.goal_range = range(self.training_range.stop, self.training_range.stop + self.num_obs_outputs)
         self.training_and_goal_range = range(0, self.training_range.stop + self.num_obs_outputs)
-        #self.joint_pos_range = range(self.goal_range.stop, self.goal_range.stop + np.prod(env.joint_angels_space.shape))
-        self.remaining_range = range(self.goal_range.stop, self.goal_range.stop + np.prod(env.remaining_space.shape))
+        #self.joint_pos_range = range(self.goal_range.stop, self.goal_range.stop + np.prod(env.joint_angels_shape))
+        self.remaining_range = range(self.goal_range.stop, self.goal_range.stop + self.num_extra_inputs)
 
-        #self.cnn_layers = half_unet_v1(np.array(list(env.training_sensor_space.shape[1:]), np.int32), num_outputs=self.num_obs_outputs)
+        #self.cnn_layers = half_unet_v1(np.array(list(env.training_sensor_shape[1:]), np.int32), num_outputs=self.num_obs_outputs)
         self.cnn_layers = resnet18(num_classes=self.num_obs_outputs)
-        self.mlp = mlp([self.num_conv_net_outputs] + planner_net_layers + [self.num_outputs], activation=torch.nn.ReLU, output_activation=torch.nn.Identity)
+        self.mlp = mlp([self.num_planner_net_inputs] + planner_net_layers + [self.num_outputs], activation=torch.nn.ReLU, output_activation=torch.nn.Identity)
         self.enc_obs_relu = torch.nn.ReLU(inplace=True)
         self.skip_relu = torch.nn.ReLU(inplace=True)
         self.shape: tuple[int, ...] = (self.num_outputs, )
@@ -258,7 +257,7 @@ class RobotArmObsEncoder(torch.nn.Module):
 
 
     def _forward(self, obs: torch.tensor):
-        # obs.shape == [batch_size, self.observation_space.shape]
+        # obs.shape == [batch_size, self.observation_shape]
         training_obs = self.env._training_obs(obs)
         goal_obs = self.env._goal_obs(obs)
         #joint_pos = self.env._joint_angles(obs)
@@ -292,7 +291,12 @@ class RobotArmObsEncoder(torch.nn.Module):
         return obs[:, self.remaining_range]
 
 
-def run(dev_mode:bool = False, resume_lesson: int = None, resume_checkpoint: str = None):
+def run(env_manager:RobotArmEnvManager, dev_mode:bool = False, resume_lesson: int = None, resume_checkpoint: str = None):
+    seed = 45632
+    random.seed(seed)
+    torch.manual_seed(seed)
+    np.random.seed(seed)
+
     if dev_mode:
         project_name = "Dev"
     else:
@@ -314,7 +318,7 @@ def run(dev_mode:bool = False, resume_lesson: int = None, resume_checkpoint: str
         "target_kl": 0.12,
         "target_vf_decay": 1.0,
         "lr_decay": 0.90,
-        "action_scaling": 4.0,
+        "action_scaling": env_manager.action_scaling,
         "entropy_factor": 0.2,
         "max_vf_priority": 4.0,
         "min_vf_priority": 4.0,
@@ -350,7 +354,7 @@ def run(dev_mode:bool = False, resume_lesson: int = None, resume_checkpoint: str
     print(config)
     wandb_mode = "online" if not dev_mode else "disabled"
     with wandb.init(project=project_name, config=config, mode=wandb_mode) as run:
-        trainer = create_trainer(project_name, run.name, **wandb.config)
+        trainer = create_trainer(project_name, run.name, env_manager, **wandb.config)
         try:
             trainer.run_training()
         finally:
@@ -359,6 +363,7 @@ def run(dev_mode:bool = False, resume_lesson: int = None, resume_checkpoint: str
 def create_trainer(
     project_name,
     exp_name,
+    env_manager: RobotArmEnvManager,
     initial_lr,
     update_epochs,
     discount: float = 0.95,
@@ -391,9 +396,6 @@ def create_trainer(
 
     save_freq = 100
 
-    file_name = "../env_build/RobotArm.x86_64"
-    env_manager= RobotArmEnvManager(file_name, action_scaling = action_scaling)
-
     # TODO Tell wandb about it
     num_envs = env_manager.env_count
 
@@ -406,13 +408,13 @@ def create_trainer(
         planner_outputs=panner_outputs
     )
 
-    action_dist_net_output_shape = np.array(env_manager.action_space.shape + (2, ))
+    action_dist_net_output_shape = np.array(env_manager.action_shape + (2, ))
     mlp_sizes = list(obs_encoder.shape) + policy_split_layers + [np.prod(action_dist_net_output_shape)]
     action_dist_net_tail = mlp(sizes=mlp_sizes)
 
     policy= ContinuousPolicy(
         obs_encoder = obs_encoder,
-        action_space = env_manager.action_space,
+        action_shape = env_manager.action_shape,
         action_dist_net_tail = action_dist_net_tail,
         std_scale = 0.5,
         min_std= torch.as_tensor([0.2, 0.2, 0.2, 0.2, 0.2]),
@@ -422,7 +424,7 @@ def create_trainer(
     experience = ExperienceBuffer(
         num_envs,
         buffer_size,
-        env_manager.observation_space.shape,
+        env_manager.observation_shape,
         policy.action_shape,
         discount,
         tensor_args = {
@@ -480,6 +482,100 @@ def create_trainer(
     return trainer
 
 
+def reload():
+    import sys
+    import importlib
+    importlib.reload(sys.modules[__name__])
+
+
+def unity_run(unity_env: EnvManager, dev_mode: bool = True, resume_lesson: int = None, resume_checkpoint: str = None):
+    try:
+        import debugpy
+
+        debugpy.listen(5678)
+        print("Waiting for debugger attach")
+        debugpy.wait_for_client()
+
+        class UnityEnv:
+            def Reset(self) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
+                pass
+
+
+            def Step(self, pyTrainingObs, pyGoalObs):
+                pass
+
+        class EnvWrapper:
+            def __init__(self, unity_env: UnityEnv) -> None:
+                self.unity_env = unity_env
+                self.training_sensor_shape = (1, 136, 84)
+                self.goal_sensor_shape = (1, 136, 84)
+                self.remaining_shape = (1, )
+                self.action_shape = (5, )
+                self.action_scaling = 4.0
+                self.env_count = 24
+
+                self.training_range = range(0, np.prod(list(self.training_sensor_shape)))
+                self.goal_range = range(self.training_range.stop, self.training_range.stop + np.prod(self.goal_sensor_shape))
+                self.remaining_range = range(self.goal_range.stop, self.goal_range.stop + np.prod(self.remaining_shape))
+
+                self.obs_length = (
+                        np.prod(np.array(self.training_sensor_shape)) +
+                        np.prod(np.array(self.goal_sensor_shape)) +
+                        np.prod(np.array(self.remaining_shape))
+                    ).item()
+
+                self.observation_shape = [self.obs_length]
+                self.stats = {}
+
+
+            def reset(self) -> list[np.ndarray]:
+                trainings_obs, goal_obs, remaining_obs = self.unity_env.Reset()
+                return self._get_obs(trainings_obs, goal_obs, remaining_obs)
+
+
+            def step(self, act: np.ndarray) -> list[(np.ndarray, np.ndarray, np.ndarray)]:
+                trainings_obs, goal_obs, remaining_obs, rew, done, success = self.unity_env.Step(act)
+                return self._get_obs(trainings_obs, goal_obs, remaining_obs), rew, done, success
+
+
+            def _get_obs(self, trainings_obs, goal_obs, remaining_obs):
+                obs = np.zeros((24, self.obs_length), dtype=np.float32)
+                obs[:, self.training_range] = (trainings_obs.astype(np.float32).reshape((-1, 136, 84, 3)).mean(axis=-1).reshape(24, -1) / (255.0 / 2.0)) - 1.0
+                obs[:, self.goal_range] = (goal_obs.astype(np.float32).reshape((-1, 136, 84, 3)).mean(axis=-1).reshape(24, -1) / (255.0 / 2.0)) - 1.0
+                obs[:, self.remaining_range]  = remaining_obs.astype(np.float32).reshape(24, 1) / 100.0
+                return obs
+
+
+            def update_obs_stats(self, experience:ExperienceBuffer):
+                pass
+
+
+            def set_lesson(self, lesson):
+                return False
+
+
+            def close(self):
+                pass
+
+
+            def _training_obs(self, obs: torch.tensor):
+                return obs[:, self.training_range].reshape(*((-1, ) + tuple(self.training_sensor_shape)))
+
+
+            def _goal_obs(self, obs: torch.tensor):
+                return obs[:, self.goal_range].reshape(*((-1, ) + tuple(self.goal_sensor_shape)))
+
+
+            def _remaining(self, obs: torch.tensor):
+                return obs[:, self.remaining_range].reshape(*((-1, ) + tuple(self.remaining_shape)))
+
+
+        run(env_manager=EnvWrapper(unity_env), dev_mode=dev_mode, resume_lesson=resume_lesson, resume_checkpoint=resume_checkpoint)
+    except Exception as e:
+        import traceback
+        traceback.print_exception(e)
+
+
 if __name__ == '__main__':
     import argparse
     parser = argparse.ArgumentParser()
@@ -488,12 +584,7 @@ if __name__ == '__main__':
     parser.add_argument('--resume', type=str, default=None)
     args = parser.parse_args()
 
-    seed = 45632
-    random.seed(seed)
-    torch.manual_seed(seed)
-    np.random.seed(seed)
+    file_name = "../env_build/RobotArm.x86_64"
+    env_manager= RobotArmEnvManager(file_name, action_scaling = 4.0)
 
-    import matplotlib
-    matplotlib.use('Agg')
-
-    run(args.dev, args.lesson, args.resume)
+    run(env_manager, args.dev, args.lesson, args.resume)
