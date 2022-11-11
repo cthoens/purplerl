@@ -91,23 +91,22 @@ class ContinuousPolicy(StochasticPolicy):
         obs_encoder: torch.nn.Module,
         action_space: list[int],
         action_dist_net_tail: list[int],
-        mean_offset: torch.tensor = None,
         min_std: torch.tensor = None,
         max_std: torch.tensor = None,
-        std_scale = 2.0
     ) -> None:
         super().__init__(obs_encoder)
         self.action_dist_net_output_shape = action_space.shape + (2, )
         self.action_shape = action_space.shape
-        self.mean_offset = mean_offset if mean_offset is not None else torch.zeros(*self.action_shape)
-        self.std_scale = std_scale
-        self.min_std = min_std if min_std is not None else torch.zeros(*self.action_shape)
-        self.max_std = max_std if max_std is not None else torch.full(float("inf"), *self.action_shape)
         self.action_dist_net_tail = action_dist_net_tail
         self.action_dist_net = nn.Sequential(
             self.obs_encoder,
             self.action_dist_net_tail
         )
+        self.min_std = min_std if min_std is not None else torch.full(-1.0, *self.action_shape)
+        self.max_std = max_std if max_std is not None else torch.full( 1.0, *self.action_shape)
+        self.std_offset = (np.log(self.min_std) + np.log(self.max_std)) / 2.0
+        self.std_scale = np.log(self.max_std) - self.std_offset
+
 
     def action_dist(self, obs=None, encoded_obs=None):
         assert((obs is None) != (encoded_obs is None))
@@ -119,14 +118,15 @@ class ContinuousPolicy(StochasticPolicy):
         shape = out.shape[:-1] + self.action_dist_net_output_shape
         out = out.reshape(shape)
         dist_mean = out[...,0]
-        dist_std = torch.clamp(self.std_scale * torch.exp(out[...,1]), self.min_std, self.max_std)
-        return Normal(loc=dist_mean + self.mean_offset, scale=dist_std)
+        dist_std = torch.clamp(torch.exp(self.std_scale * out[...,1] + self.std_offset), self.min_std, self.max_std)
+        return Normal(loc=dist_mean, scale=dist_std)
 
 
     def to(self, device):
         super().to(device)
 
-        self.mean_offset = self.mean_offset.to(device)
+        self.std_offset = self.std_offset.to(device)
+        self.std_scale = self.std_scale.to(device)
         self.min_std = self.min_std.to(device)
         self.max_std = self.max_std.to(device)
 
@@ -136,14 +136,12 @@ class ContinuousPolicy(StochasticPolicy):
     def checkpoint(self):
         return {
             'action_dist_net_state_dict': {k: v.cpu() for k, v in self.action_dist_net.state_dict().items()},
-            #'action_dist_std_scale': self.std_scale
         }
 
 
     def load_checkpoint(self, checkpoint):
         self.action_dist_net.load_state_dict(checkpoint['action_dist_net_state_dict'])
         self.action_dist_net_tail = list(self.action_dist_net.children())[-1]
-        #self.std_scale = checkpoint['action_dist_std_scale']
 
 
 class PPO():
@@ -153,23 +151,15 @@ class PPO():
     KL_MEAN = "KL"
     KL_STD = "KL Std"
     KL_MAX = "KL Max"
-    POLICY_EPOCHS = "Policy Epochs"
-    VF_EPOCHS = "VF Epochs"
-    UPDATE_BALANCE = "Update Balance"
-    VF_PRIORITY = "VF Priority"
-    CLIP_FACTOR = "Clip Factor"
-    VALUE_LOSS = "VF Loss"
     VALUE_LOSS_IN_MEAN = "VF Loss In"
     VALUE_LOSS_IN_STD = "VF Loss In Std"
     VALUE_LOSS_IN_MAX = "VF Loss In Max"
-    VALUE_LOSS_FACTOR = "VF Loss Factor"
+    VF_DELTA = "VF Delta"
+    UPDATE_EPOCHS = "Update Epochs"
+    VF_PRIORITY = "VF Priority"
+    CLIP_FACTOR = "Clip Factor"
     BACKTRACK_POLICY = "Backtrack Policy"
     BACKTRACK_VF = "Backtrack VF"
-    VF_DELTA = "VF Delta"
-
-    MIN_UPDATE_BALANCE = 0.0
-    MAX_UPDATE_BALANCE = 1.0
-    UPDATE_BALANCE_STEP = 0.001
 
     def __init__(self,
         cfg: dict,
@@ -185,8 +175,8 @@ class PPO():
         target_vf_decay: float = 0.1,
         lr_decay: float = 0.95,
         entropy_factor: float = 0.0,
-        max_vf_priority: float = 20.0,
-        min_vf_priority: float = 1.0,
+        max_vf_priority: float = 4.0,
+        min_vf_priority: float = 1.0/4.0,
         warmup_updates: int = 0
     ) -> None:
         self.cfg = cfg
@@ -202,10 +192,9 @@ class PPO():
         self.lr_factor = 1.0
         self.lr_decay = lr_decay
         self.entropy_factor = entropy_factor
-        self.update_balance = (self.MAX_UPDATE_BALANCE - self.MIN_UPDATE_BALANCE) / 2.0
         self.max_vf_priority = max_vf_priority
         self.min_vf_priority = min_vf_priority
-        self.vf_priority_step = pow(1.0 / max_vf_priority, 1.0/10.0) #=> 10 steps to get from max to 1.0
+        self.vf_priority_step = pow(min_vf_priority / max_vf_priority, 1.0/14.0) #=> 14 steps to get from max to min_vf_priority
         self.vf_priority = max_vf_priority
         self.remaining_warmup_updates = warmup_updates
         self.stats = {}
@@ -221,8 +210,9 @@ class PPO():
         # The extra slot at the end of used in _finish_env_path().
         # Note: This is used during experience collection to calculate advanteaged and during
         # the update to calculate loss statistics
-        self.value = torch.zeros(experience.buffer_size+1, experience.num_envs, dtype=config.dtype)
-        self.kl = torch.zeros(experience.buffer_size+1, experience.num_envs, dtype=config.dtype)
+        self.value_full = torch.zeros(experience.buffer_size+1, experience.num_envs, dtype=config.dtype)
+        self.value = self.value_full[:-1,...]
+        self.kl = torch.zeros(experience.buffer_size, experience.num_envs, dtype=config.dtype)
         self.logp_old = torch.zeros(experience.buffer_size, experience.num_envs, **experience.tensor_args)
         self.weight = torch.zeros(experience.buffer_size, experience.num_envs, **experience.tensor_args)
 
@@ -230,6 +220,7 @@ class PPO():
         self.kl_merged = self.kl.reshape(-1)
         self.logp_old_merged = self.logp_old.reshape(-1)
         self.weight_merged = self.weight.reshape(-1)
+        self.abs_kl_sign = torch.zeros(experience.buffer_size * experience.num_envs, **experience.tensor_args)
 
         self.obs_loader = DataLoader(TensorDataset(self.experience.obs_merged), batch_size=self.update_batch_size, pin_memory=cfg.pin)
         self.action_loader = DataLoader(TensorDataset(self.experience.action_merged), batch_size=self.update_batch_size, pin_memory=cfg.pin)
@@ -247,53 +238,52 @@ class PPO():
 
         # If we have a lot more successes than failures (or opposite) in the buffer scale down the weight of the successes such
         # that the underepresented case gets a stronger influence on the gradient
-        if self.experience.ep_success_info_count == 0 or self.experience.success_rate() == 0.0:
-            return
-
         if self.experience.success_rate() > 0.5:
-            self.weight[self.experience.success] *= max((1.0 - self.experience.success_rate()) * 2.0, 0.25)
+            # Value function predicted success: Advantage is < 1.0 and made smaller
+            # Value function predicted failure: Advantage is > 1.7 and made smaller
+            self.weight[self.experience.success] *= max((1.0 - self.experience.success_rate()) * 2.0, 0.20)
         else:
-            self.weight[torch.logical_not(self.experience.success)] *= max(self.experience.success_rate() * 2.0, 0.25)
+            self.weight[torch.logical_not(self.experience.success)] *= max(self.experience.success_rate() * 2.0, 0.20)
 
 
     def update(self):
-        for _ in range(3):
-            if self._do_update():
-                if self.remaining_warmup_updates>0:
-                    print(f"* {self.remaining_warmup_updates}", end=None)
-                self.remaining_warmup_updates = max(self.remaining_warmup_updates - 1, 0)
-
-                return
-
-        # Note: Reset optimizier stats we all attempts were rolled back
-        self._reset_lr_momentum()
+        self._do_update()
 
 
     def _do_update(self):
         for key in self.stats:
             self.stats[key] = None
-        self.stats[self.POLICY_EPOCHS] = 0
-        self.stats[self.VF_EPOCHS] = 0
+        self.stats[self.UPDATE_EPOCHS] = 0
         self.stats[self.BACKTRACK_POLICY] = 0
         self.stats[self.BACKTRACK_VF] = 0
         self.stats[self.LR_FACTOR] = self.lr_factor
-        self.stats[self.UPDATE_BALANCE] = self.update_balance
         self.stats[self.VF_PRIORITY] = self.vf_priority
 
         counts = np.zeros(2)
         totals = torch.zeros(2, requires_grad=False, **self.cfg.tensor_args)
         policy_loss_total, clip_factor_total = totals[0:1], totals[1:2]
         policy_loss_count, clip_factor_count = counts[0:1], counts[1:2]
-        last_epoch_value_loss_mean = float("inf")
+        last_abs_epoch_kl = 0.0
+        previous_was_backtrack = False
+        backtrack_count = 0
+        # => if the lr we previously increased in this update, roll back the increase
+        lr_was_increased = False
         #last_epoch_kl = 0.0
         value_loss_mean_old = float("-inf")
+        # Might have changed because of resume
+        self.vf_priority = np.clip(self.vf_priority, self.min_vf_priority, self.max_vf_priority).item()
         is_warmup_update = self.remaining_warmup_updates > 0
+        epochs_since_backtrack = 0
 
-        cp = None
+        backtrack_point = None
         for update_epoch in range(self.update_epochs+1):
             is_first_epoch = update_epoch == 0
-            is_after_first_update = update_epoch == 1
+            is_last_update_epoch = update_epoch == self.update_epochs-1
             is_validate_epoch = update_epoch == self.update_epochs
+            # => if update 0, or 1 is rolled back, decrease the rl
+            is_lr_dec_epoch = update_epoch <= 2
+            # If update 0, 1 have been successfull, increase lr for update 3 and above
+            is_lr_inc_epoch = epochs_since_backtrack >= 2
             batch_start = 0
             totals[...] = 0.0
             counts[...] = 0
@@ -327,7 +317,7 @@ class PPO():
                 #if self.remaining_warmup_updates > 0:
                 #   batch_policy_loss, kl, clip_factor, entropy = self._stationary_policy_loss(logp_old, encoded_obs, act, adv)
                 #else:
-                batch_policy_loss, kl, clip_factor, entropy = self._policy_loss(logp_old, encoded_obs, act, adv)
+                batch_policy_loss, policy_net_penality, kl, clip_factor, entropy = self._policy_loss(logp_old, encoded_obs, act, adv)
 
                 self.kl_merged[batch_range] = kl.detach().cpu()
                 policy_loss_total += batch_policy_loss.sum().detach()
@@ -349,7 +339,7 @@ class PPO():
                 # Note: Calculdate stats even if update_vf == False to check for passive_vf_progression (see below)
 
                 discounted_reward = discounted_reward[0].to(self.cfg.device, non_blocking=True)
-                batch_value_loss = self._value_loss(encoded_obs, discounted_reward)
+                batch_value_loss, value_net_penality = self._value_loss(encoded_obs, discounted_reward)
                 del discounted_reward
                 del encoded_obs
 
@@ -363,118 +353,164 @@ class PPO():
                 #vf_loss_factor = torch.abs(batch_policy_loss.detach() / batch_value_loss.detach())
                 vf_loss_factor = self.vf_priority
 
-                loss = batch_policy_loss + vf_loss_factor * batch_value_loss  + self.entropy_factor * entropy.mean()
+                loss = batch_policy_loss + vf_loss_factor * batch_value_loss + policy_net_penality + value_net_penality + self.entropy_factor * entropy.mean()
                 if not is_validate_epoch:
                     loss.backward()
 
+                self.stats["Policy Net Penalty"] = policy_net_penality.item()
+                self.stats["Value Net Penality"] = value_net_penality.item()
+
                 del batch_policy_loss
                 del batch_value_loss
+                del policy_net_penality
+                del value_net_penality
                 del entropy
                 del loss
             # end for: iterate through dataset batches
-            self.stats[self.VALUE_LOSS_FACTOR] = vf_loss_factor
 
-            # whether to roll back policy and vf to state before last update
-            backtrack = False
-
-            policy_done = False
-            epoch_kl = self.kl
-            epoch_kl_mean = epoch_kl.mean().item()
-            epoch_kl_std = epoch_kl.std().item()
-            # kl_decreased = (epoch_kl < last_epoch_kl and not self.vf_only_update) or
-            kl_limit_reached = epoch_kl_mean + epoch_kl_std > self.target_kl
-            if kl_limit_reached:
-                print("->", end="")
-                self.stats[self.BACKTRACK_POLICY] = 1.0
-                backtrack = True
-                policy_done = True
-            else:
-                print("  ", end="")
-
-            print(f"{epoch_kl_mean + epoch_kl_std:.4f} ", end="")
-
-            vf_done = False
             epoch_value_loss = self.value
             epoch_value_loss_mean = epoch_value_loss.mean().item()
-            vf_delta = value_loss_mean_old - epoch_value_loss_mean
-            value_loss_increased = epoch_value_loss_mean > last_epoch_value_loss_mean
-            value_update_limit_reached = not is_warmup_update and vf_delta > value_loss_mean_old * self.target_vf_decay
-            if value_loss_increased or value_update_limit_reached:
-                print("->", end="")
-                self.stats[self.BACKTRACK_VF] = 1.0
-                backtrack = True
-                vf_done = True
-            print(f"{epoch_value_loss_mean:.4f}")
-
-            if policy_done and not vf_done:
-                self.update_balance = min(self.update_balance + self.UPDATE_BALANCE_STEP, self.MAX_UPDATE_BALANCE)
-                self._inc_vf_priority()
-            if vf_done and not policy_done:
-                if not is_warmup_update:
-                    self._dec_vf_priority()
-                self.update_balance = max(self.update_balance - self.UPDATE_BALANCE_STEP, self.MIN_UPDATE_BALANCE)
-
-            if backtrack:
-                assert(not is_first_epoch)
-                # Keep update balance updates from getting reverted by the rollback
-                update_balance_backup = self.update_balance
-                vf_priority_backup = self.vf_priority
-                self._load_full_checkpoint(cp)
-                self.update_balance = update_balance_backup
-                self.vf_priority = vf_priority_backup
-
-                #Note: No need to backup the lr across the roll back, since this overwrites it
-                early_backtrack = update_epoch <= 3    # => if update 0, 1 or 2 is rolled back, decrease the rl
-                if early_backtrack:
-                    self._dec_lr_factor()
-
-                rollback_increase = update_epoch >= 4   # => if the lr we previously increased in this update roll back the increase
-                if rollback_increase:
-                    self._rollback_inc_lr_factor()
-
-                return not is_after_first_update
-
-            last_epoch_value_loss_mean = epoch_value_loss_mean
-            #last_epoch_kl = epoch_kl
 
             if is_first_epoch:
-                value_loss_mean_old = epoch_value_loss_mean
-            else:
-                self.stats[self.VF_DELTA] = value_loss_mean_old - epoch_value_loss_mean
-
-            if not is_first_epoch:
-                self.stats[self.POLICY_EPOCHS] += 1
-                self.stats[self.KL_MEAN] = epoch_kl_mean
-                self.stats[self.KL_STD] = epoch_kl_std
-                self.stats[self.KL_MAX] = epoch_kl.max().item()
-                if clip_factor_count != 0:
-                    self.stats[self.POLICY_LOSS] = policy_loss_total.item() / policy_loss_count.item()
-                    self.stats[self.CLIP_FACTOR] = clip_factor_total.item() / clip_factor_count.item()
-                self.stats[self.VF_EPOCHS] += 1
-                self.stats[self.VALUE_LOSS] = epoch_value_loss_mean
-            else:
                 self.stats[self.VALUE_LOSS_IN_MEAN] = epoch_value_loss_mean
                 self.stats[self.VALUE_LOSS_IN_STD] = epoch_value_loss.std().item()
                 self.stats[self.VALUE_LOSS_IN_MAX] = epoch_value_loss.max().item()
+                value_loss_mean_old = epoch_value_loss_mean
+                last_epoch_value_loss_mean = epoch_value_loss_mean
+                last_abs_epoch_kl = 0.0
 
-            if not is_validate_epoch:
-                if update_epoch >= 3: # If update 0, 1, 2 have been successfull, increase lr for update 3 and above
-                    self._inc_lr_factor()
-
-                cp = self._full_checkpoint()
+                backtrack_point = self._full_checkpoint()
                 self.optimizer.step()
 
-        return True
+                print(f"                --  {epoch_value_loss_mean:.4f}    {self.lr_factor:.3f}  ===  {self.vf_priority:.3f}")
+                continue
+
+            self.abs_kl_sign[:] = -1.0
+            self.abs_kl_sign[self.weight_merged<0] = 1.0
+            self.abs_kl_sign[self.experience.discounted_reward_merged<0] = 0
+
+            epoch_kl = self.kl
+            epoch_kl_mean = epoch_kl.mean().item()
+            epoch_kl_std = epoch_kl.std().item()
+            epoch_abs_kl = epoch_kl.flatten() * self.abs_kl_sign
+            epoch_abs_kl_delta = epoch_abs_kl - last_abs_epoch_kl
+            epoch_abs_kl_mean = epoch_abs_kl_delta.min().item()
+
+            if previous_was_backtrack:
+                # Validation epoch is skipped if the last_upate_epoch was backtracked
+                assert(not is_validate_epoch)
+                self.optimizer.step()
+                previous_was_backtrack = False
+                epochs_since_backtrack = 0
+
+                #print(f"[{epoch_kl_mean + epoch_kl_std:.4f} {epoch_abs_kl_mean:.4f}  --  {epoch_value_loss_mean:.4f}    {self.lr_factor:.3f}  ===  {self.vf_priority:.3f}]")
+                continue
+
+            epochs_since_backtrack += 1
+            vf_delta = value_loss_mean_old - epoch_value_loss_mean
+
+            policy_oscilating = (epoch_abs_kl_delta < -0.05).any()
+            vf_oscilating = epoch_value_loss_mean > last_epoch_value_loss_mean
+            kl_reached_target = epoch_kl_mean + epoch_kl_std > self.target_kl
+            kl_reached_max = epoch_kl_mean + epoch_kl_std > self.target_kl * 1.15
+
+            backtrack = False
+            if policy_oscilating and vf_oscilating:
+                # => the network weights moved too much to stay in the region of descend
+                # => decrease the learning rate
+                self._dec_lr_factor()
+                backtrack = True
+
+                print(f"{epoch_kl_mean + epoch_kl_std:.4f} {epoch_abs_kl_mean:.4f} <--> {epoch_value_loss_mean:.4f}    {self.lr_factor:.3f} ↓===  {self.vf_priority:.3f}")
+
+            elif vf_oscilating:
+                # => the influence of the policy update on the gradient was too strong
+                # => shift vf_priority toward the value loss (increase)
+                backtrack = True
+
+                self._inc_vf_priority()
+                self._dec_lr_factor(decy_steps = 0.5)
+
+                print(f"{epoch_kl_mean + epoch_kl_std:.4f} {epoch_abs_kl_mean:.4f}  --> {epoch_value_loss_mean:.4f}    {self.lr_factor:.3f} ↓===↑ {self.vf_priority:.3f}")
+
+
+            elif policy_oscilating:
+                # => the influence of the value function update on the gradient was too strong
+                # => shift vf_priority toward the policy loss (decrease)
+                backtrack = True
+
+                self._dec_vf_priority()
+                self._dec_lr_factor(decy_steps = 0.5)
+
+                print(f"{epoch_kl_mean + epoch_kl_std:.4f} {epoch_abs_kl_mean:.4f} <--  {epoch_value_loss_mean:.4f}    {self.lr_factor:.3f} ↓===↓ {self.vf_priority:.3f}")
+
+            elif kl_reached_max:
+                self._inc_vf_priority()
+                self._dec_lr_factor(decy_steps = 0.5)
+
+                print(f"{epoch_kl_mean + epoch_kl_std:.4f} {epoch_abs_kl_mean:.4f} !--  {epoch_value_loss_mean:.4f}    {self.lr_factor:.3f} ↓===↑ {self.vf_priority:.3f}")
+                backtrack = True
+            elif kl_reached_target:
+                print(f"{epoch_kl_mean + epoch_kl_std:.4f} {epoch_abs_kl_mean:.4f} *--  {epoch_value_loss_mean:.4f}    {self.lr_factor:.3f}  ===  {self.vf_priority:.3f}")
+                break
+
+            elif is_lr_inc_epoch:
+                self._inc_lr_factor()
+
+                print(f"{epoch_kl_mean + epoch_kl_std:.4f} {epoch_abs_kl_mean:.4f}  --  {epoch_value_loss_mean:.4f}    {self.lr_factor:.3f} ↑===  {self.vf_priority:.3f}")
+            else:
+                print(f"{epoch_kl_mean + epoch_kl_std:.4f} {epoch_abs_kl_mean:.4f}  --  {epoch_value_loss_mean:.4f}    {self.lr_factor:.3f}  ===  {self.vf_priority:.3f}")
+
+            self.stats[self.LR_FACTOR] = self.lr_factor
+            self.stats[self.VF_PRIORITY] = self.vf_priority
+
+            previous_was_backtrack = backtrack
+            if backtrack:
+                # Keep vf_priority updates from getting reverted by the rollback
+                lr_factor_backup = self.lr_factor
+                vf_priority_backup = self.vf_priority
+                self._load_full_checkpoint(backtrack_point)
+                self.lr_factor = lr_factor_backup
+                self.vf_priority = vf_priority_backup
+                self._restore_lr()
+
+                backtrack_count += 1
+
+                if backtrack_count==2 or is_last_update_epoch:
+                    # In the next epoch only statitics will be updated, but no parameters. This
+                    # is not necessary if we backtracked just before that
+                    return
+                else:
+                    continue
+
+            last_epoch_value_loss_mean = epoch_value_loss_mean
+            last_abs_epoch_kl = epoch_abs_kl
+
+            self.stats[self.UPDATE_EPOCHS] += 1
+            self.stats[self.VF_DELTA] = vf_delta
+            self.stats[self.KL_MEAN] = epoch_kl_mean
+            self.stats[self.KL_STD] = epoch_kl_std
+            self.stats[self.KL_MAX] = epoch_kl.max().item()
+            if clip_factor_count != 0:
+                self.stats[self.POLICY_LOSS] = policy_loss_total.item() / policy_loss_count.item()
+                self.stats[self.CLIP_FACTOR] = clip_factor_total.item() / clip_factor_count.item()
+
+            #if self.remaining_warmup_updates>0:
+            #    print(f"* {self.remaining_warmup_updates}")
+            self.remaining_warmup_updates = max(self.remaining_warmup_updates - 1, 0)
+
+            if not is_validate_epoch:
+                backtrack_point = self._full_checkpoint()
+                self.optimizer.step()
 
 
     def _inc_lr_factor(self):
         # find factor such that applying applying it decay_revert_steps times reverts one decay step
-        decay_revert_steps = 5
+        decay_revert_steps = 3
         factor = (1.0 / self.lr_decay)**(1/decay_revert_steps)
 
         self.lr_factor *= factor
         lr = self.initial_lr * self.lr_factor
-        print(f"====> {self.lr_factor:.4f}  /  {self.vf_priority:.4f}")
         for group in self.optimizer.param_groups:
             group['lr'] = lr
 
@@ -487,15 +523,19 @@ class PPO():
 
         self.lr_factor *= factor
         lr = self.initial_lr * self.lr_factor
-        print(f"====> {self.lr_factor:.4f}  /  {self.vf_priority:.4f}")
         for group in self.optimizer.param_groups:
             group['lr'] = lr
 
 
-    def _dec_lr_factor(self):
-        self.lr_factor *= self.lr_decay
+    def _restore_lr(self):
         lr = self.initial_lr * self.lr_factor
-        print(f"====> {self.lr_factor:.4f}  /  {self.vf_priority:.4f}")
+        for group in self.optimizer.param_groups:
+            group['lr'] = lr
+
+
+    def _dec_lr_factor(self, decy_steps = 1.0):
+        self.lr_factor *= self.lr_decay**decy_steps
+        lr = self.initial_lr * self.lr_factor
         for group in self.optimizer.param_groups:
             group['lr'] = lr
 
@@ -543,13 +583,21 @@ class PPO():
         clip_adv = torch.clamp(ratio, 1.0-self.clip_ratio, 1.0+self.clip_ratio) * adv
         loss = -(torch.min(ratio * adv, clip_adv))
 
+        # policy net penality
+        policy_net_penalty = self.policy.action_dist_net_tail(encoded_obs)
+        policy_net_penalty = torch.square(policy_net_penalty)
+        in_bounds = policy_net_penalty <= 1.2 * 1.2
+        policy_net_penalty[in_bounds] = 0.0
+        policy_net_penalty[torch.logical_not(in_bounds)] -= 1.2 * 1.2
+        output_penality_sum = torch.sum(policy_net_penalty)
+
         # Stats
         kl = logp_old - logp
         entropy = action_dist.entropy()
         clipped = ratio.gt(1+self.clip_ratio) | ratio.lt(1-self.clip_ratio)
         clip_factor = torch.as_tensor(clipped, dtype=torch.float32)
 
-        return loss, kl, clip_factor, entropy
+        return loss, output_penality_sum, kl, clip_factor, entropy
 
 
     def value_estimate(self, encoded_obs):
@@ -557,7 +605,15 @@ class PPO():
 
 
     def _value_loss(self, encoded_obs, discounted_reward):
-        return torch.square(self.value_net_tail(encoded_obs).squeeze(-1) - discounted_reward)
+        value_net_out = self.value_net_tail(encoded_obs).squeeze(-1)
+
+        value_net_penality = torch.square(value_net_out)
+        in_bounds = value_net_penality <= 1.2 * 1.2
+        value_net_penality[in_bounds] = 0.0
+        value_net_penality[torch.logical_not(in_bounds)] -= 1.2 * 1.2
+        value_net_penality_sum = torch.sum(value_net_penality)
+
+        return torch.square(value_net_out - discounted_reward), value_net_penality_sum
 
 
     def _end_env_episode(self, env_idx: int):
@@ -570,7 +626,7 @@ class PPO():
         path_slice_plus_one = range(self.experience.ep_start_index[env_idx], self.experience.next_step_index+1)
         rews = self.experience.step_reward[path_slice, env_idx]
 
-        vals = self.value[path_slice_plus_one, env_idx].numpy()
+        vals = self.value_full[path_slice_plus_one, env_idx].numpy()
         vals[-1] = last_state_value_estimate if not reached_terminal_state else 0.0
 
         # estimated reward for state transition = estimated value of next state - estimated value of current state
@@ -591,7 +647,6 @@ class PPO():
             'optimizer_state_dict': self.optimizer.state_dict(),
             'initial_lr': self.initial_lr,
             'lr_factor': self.lr_factor,
-            'update_balance': self.update_balance,
             'remaining_warmup_updates': self.remaining_warmup_updates,
             'vf_priority': self.vf_priority,
             'remaining_warmup_updates': self.remaining_warmup_updates
@@ -603,7 +658,6 @@ class PPO():
         self.optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
         self.initial_lr = checkpoint['initial_lr']
         self.lr_factor = checkpoint['lr_factor']
-        self.update_balance = checkpoint['update_balance']
         self.vf_priority = checkpoint.get('vf_priority', self.vf_priority)
         self.remaining_warmup_updates = checkpoint.get('remaining_warmup_updates', 0)
 

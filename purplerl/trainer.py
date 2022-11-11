@@ -124,7 +124,7 @@ class Trainer:
                 wandb.log(copy.deepcopy(self.all_stats), step=self.epoch)
                 self.log_to_console()
 
-                if self.policy_updater.lr_factor < 0.01:
+                if self.policy_updater.lr_factor < 0.0001:
                     wandb.alert(
                         title='Learning rate collapsed',
                         text=f'Learning rate collapsed',
@@ -299,7 +299,7 @@ class Trainer:
             pass
 
     def load_checkpoint(self, file):
-        checkpoint = torch.load(file)
+        checkpoint = torch.load(file) #, map_location=self.cfg.device
         self.policy.load_checkpoint(checkpoint["policy"])
         self.policy_updater.load_checkpoint(checkpoint["policy_updater"])
         trainer_state = checkpoint["trainer"]

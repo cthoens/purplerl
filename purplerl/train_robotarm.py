@@ -1,3 +1,4 @@
+import math
 import os
 
 import random
@@ -298,29 +299,29 @@ def run(dev_mode:bool = False, resume_lesson: int = None, resume_checkpoint: str
     else:
         project_name = "RobotArm"
     if resume_checkpoint:
-        checkpoint_path = os.path.join(f"results", project_name, resume_checkpoint)
-        if not os.path.exists(checkpoint_path):
-            print(f"Checkpoint does not exist: {checkpoint_path}")
+        if not os.path.exists(resume_checkpoint):
+            print(f"Checkpoint does not exist: {resume_checkpoint}")
             return;
 
     base_config = {
         "new_lesson_warmup_updates": 8,
         "lesson_timeout_episodes": 80,
-        "initial_lr": 1e-4,
-        "update_epochs" : 5,
+        "initial_lr": 2e-5,
+        "update_epochs" : 20,
         "discount": 0.95,
         "adv_lambda": 0.95,
         "clip_ratio": 0.03,
-        "target_kl": 0.12,
+        # limit 85% of the changes in probabiliby of taking an action to 15%
+        "target_kl": math.log(1.15),
         "target_vf_decay": 1.0,
         "lr_decay": 0.90,
-        "action_scaling": 4.0,
+        "action_scaling": 5.0,
         "entropy_factor": 0.2,
-        "max_vf_priority": 4.0,
-        "min_vf_priority": 4.0,
+        "max_vf_priority": 3.0,
+        "min_vf_priority": 0.33,
 
-        "update_batch_size":  16,
-        "update_batch_count": 6,
+        "update_batch_size":  15,
+        "update_batch_count": 4,
         "epochs": 2000,
         "resume_lesson": resume_lesson,
         "resume_checkpoint": resume_checkpoint
@@ -410,13 +411,16 @@ def create_trainer(
     mlp_sizes = list(obs_encoder.shape) + policy_split_layers + [np.prod(action_dist_net_output_shape)]
     action_dist_net_tail = mlp(sizes=mlp_sizes)
 
+    # action mean output of 1 maps to 5 Deg movement
+    # action std range is 0.5 - 5.0 Deg
+    # keep randomnes to 3 deg for 78.2% of angle changes to
+
     policy= ContinuousPolicy(
         obs_encoder = obs_encoder,
         action_space = env_manager.action_space,
         action_dist_net_tail = action_dist_net_tail,
-        std_scale = 0.5,
-        min_std= torch.as_tensor([0.2, 0.2, 0.2, 0.2, 0.2]),
-        max_std= torch.as_tensor([0.6, 0.6, 0.6, 0.6, 0.6])
+        min_std = torch.as_tensor([1.0, 1.0, 1.0, 1.0, 1.0]) / action_scaling,
+        max_std = torch.as_tensor([5.0, 5.0, 5.0, 5.0, 5.0]) / action_scaling,
     ).to(cfg.device)
 
     experience = ExperienceBuffer(
@@ -468,13 +472,12 @@ def create_trainer(
         #eval_func =
     )
 
-    checkpoint_path = os.path.join(f"results", project_name, resume_checkpoint if resume_checkpoint else "")
-    if resume_checkpoint and os.path.exists(checkpoint_path):
-        if os.path.islink(checkpoint_path):
-            print(f"Resuming from {checkpoint_path}[{os.readlink(checkpoint_path)}]")
+    if resume_checkpoint and os.path.exists(resume_checkpoint):
+        if os.path.islink(resume_checkpoint):
+            print(f"Resuming from {resume_checkpoint}[{os.readlink(resume_checkpoint)}]")
         else:
-            print(f"Resuming from {checkpoint_path}")
-        trainer.load_checkpoint(checkpoint_path)
+            print(f"Resuming from {resume_checkpoint}")
+        trainer.load_checkpoint(resume_checkpoint)
     else:
         print("****\n**** Starting from scratch !!!\n****")
     return trainer
