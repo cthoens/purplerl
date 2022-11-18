@@ -230,8 +230,8 @@ class RobotArmObsEncoder(torch.nn.Module):
         self.planner_skip_connection = planner_skip_connection
         self.num_obs_outputs = obs_outputs
         self.num_combined_obs_outputs = 2 * self.num_obs_outputs
-        self.num_outputs = planner_outputs
         self.num_conv_net_outputs = 2 * self.num_obs_outputs + np.prod(env.remaining_space.shape) #+ np.prod(env.joint_angels_space.shape)
+        self.num_outputs = self.num_conv_net_outputs
 
         self.training_range = range(0, self.num_obs_outputs)
         self.goal_range = range(self.training_range.stop, self.training_range.stop + self.num_obs_outputs)
@@ -249,10 +249,11 @@ class RobotArmObsEncoder(torch.nn.Module):
     def forward(self, obs: torch.tensor):
         enc_obs = self._forward(obs)
         enc_obs = self.enc_obs_relu(enc_obs)
-        out = self.mlp(enc_obs)
-        if self.planner_skip_connection:
-            out[:, :self.num_combined_obs_outputs] += self._training_and_goal_obs(enc_obs)
-        out = self.skip_relu(out)
+        out = enc_obs
+        #out = self.mlp(enc_obs)
+        #if self.planner_skip_connection:
+        #    out[:, :self.num_combined_obs_outputs] += self._training_and_goal_obs(enc_obs)
+        #out = self.skip_relu(out)
 
         # restore the buffer dimension
         return out
@@ -304,24 +305,36 @@ def run(dev_mode:bool = False, resume_lesson: int = None, resume_checkpoint: str
             return;
 
     base_config = {
-        "new_lesson_warmup_updates": 8,
         "lesson_timeout_episodes": 80,
-        "initial_lr": 2e-5,
-        "update_epochs" : 20,
+        "new_lesson_warmup_updates":8,
+
+        #policy_update
         "discount": 0.95,
         "adv_lambda": 0.95,
         "clip_ratio": 0.03,
-        # limit 85% of the changes in probabiliby of taking an action to 15%
-        "target_kl": math.log(1.15),
-        "target_vf_decay": 1.0,
-        "lr_decay": 0.90,
-        "action_scaling": 5.0,
-        "entropy_factor": 0.2,
-        "max_vf_priority": 3.0,
-        "min_vf_priority": 0.33,
+        "entropy_factor": 0.0,
 
-        "update_batch_size":  15,
-        "update_batch_count": 4,
+        "policy_kl_lower_min": 0.85,
+        "policy_kl_upper_target": 1.30,
+        "policy_kl_upper_max": 1.40,
+        "policy_valid_kl_lower_bound": 0.95,
+        "policy_shifting_right_way_scale": 0.1,
+
+        "policy_lr_decay": 0.90,
+        "policy_initial_lr": 5e-5,
+        "policy_update_epochs" : 40,
+        "policy_update_batch_size":  15,
+        "policy_update_batch_count": 4,
+
+        # vf update
+        "vf_lr_decay": 0.90,
+        "vf_initial_lr": 1e-4,
+        "vf_update_epochs" : 50,
+        "vf_update_batch_size":  60,
+
+        # env
+        "action_scaling": 5.0,
+
         "epochs": 2000,
         "resume_lesson": resume_lesson,
         "resume_checkpoint": resume_checkpoint
@@ -340,14 +353,14 @@ def run(dev_mode:bool = False, resume_lesson: int = None, resume_checkpoint: str
     split_config = base_config.copy()
     split_config.update({
         "obs_encoder_outputs": 128,
-        "planner_layers": [4096],
-        "panner_outputs": 2048,
-        "planner_skip_connection": True,
-        "policy_split_layers": [4096],
-        "value_net_split_layers": [4096],
+        "planner_layers": [],
+        "panner_outputs": 0,
+        "planner_skip_connection": False,
+        "policy_split_layers": [4096, 2048, 4096],
+        "value_net_split_layers": [4096, 2048, 4096],
     })
 
-    config = unified_config
+    config = split_config
     print(config)
     wandb_mode = "online" if not dev_mode else "disabled"
     with wandb.init(project=project_name, config=config, mode=wandb_mode) as run:
@@ -360,18 +373,30 @@ def run(dev_mode:bool = False, resume_lesson: int = None, resume_checkpoint: str
 def create_trainer(
     project_name,
     exp_name,
-    initial_lr,
-    update_epochs,
-    discount: float = 0.95,
-    adv_lambda: float = 0.95,
-    clip_ratio: float = 0.2,
-    target_kl: float = 0.15,
-    target_vf_decay: float = 1.0,
-    lr_decay: float = 0.95,
-    action_scaling: float = 2.0,
-    entropy_factor: float = 0.0,
-    max_vf_priority: float = 20.0,
-    min_vf_priority: float = 1.0,
+
+    discount: float,
+    adv_lambda: float,
+    clip_ratio: float,
+    entropy_factor: float,
+
+    policy_kl_lower_min: float,
+    policy_kl_upper_target: float,
+    policy_kl_upper_max: float,
+    policy_valid_kl_lower_bound: float,
+    policy_shifting_right_way_scale: float,
+
+    policy_initial_lr: float,
+    policy_update_batch_size: int,
+    policy_update_epochs: int,
+    policy_lr_decay: float,
+
+    vf_initial_lr: float,
+    vf_update_batch_size: int,
+    vf_update_epochs: int,
+    vf_lr_decay: float,
+
+    action_scaling: float,
+    policy_update_batch_count: int,
 
     obs_encoder_outputs = 128,
     planner_layers = [4096, 4096],
@@ -381,14 +406,14 @@ def create_trainer(
     value_net_split_layers = [],
 
     lesson_timeout_episodes: int = 80,
-    new_lesson_warmup_updates: int = 0,
-    update_batch_size: int = 29,
-    update_batch_count: int = 1,
-    epochs: int = 3000,
+    new_lesson_warmup_updates: int = 8,
+
+    epochs: int = 2000,
     resume_lesson: int = None,
     resume_checkpoint: str = None
 ):
-    buffer_size = update_batch_size * update_batch_count
+    buffer_size = policy_update_batch_size * policy_update_batch_count
+    assert(vf_update_batch_size % vf_update_batch_size == 0)
 
     save_freq = 100
 
@@ -441,18 +466,26 @@ def create_trainer(
         policy = policy,
         experience = experience,
         value_net_tail = value_net_tail,
-        initial_lr = initial_lr,
-        warmup_updates = new_lesson_warmup_updates,
-        update_epochs = update_epochs,
-        update_batch_size=update_batch_size,
-        lam = adv_lambda,
+
+        adv_lambda = adv_lambda,
         clip_ratio = clip_ratio,
-        target_kl = target_kl,
-        target_vf_decay = target_vf_decay,
-        lr_decay = lr_decay,
         entropy_factor = entropy_factor,
-        max_vf_priority=max_vf_priority,
-        min_vf_priority=min_vf_priority
+
+        policy_kl_lower_min=policy_kl_lower_min,
+        policy_kl_upper_target=policy_kl_upper_target,
+        policy_kl_upper_max=policy_kl_upper_max,
+        policy_valid_kl_lower_bound=policy_valid_kl_lower_bound,
+        policy_shifting_right_way_scale=policy_shifting_right_way_scale,
+
+        policy_initial_lr = policy_initial_lr,
+        policy_update_batch_size = policy_update_batch_size,
+        policy_update_epochs = policy_update_epochs,
+        policy_lr_decay = policy_lr_decay,
+
+        vf_initial_lr = vf_initial_lr,
+        vf_update_batch_size = vf_update_batch_size,
+        vf_update_epochs = vf_update_epochs,
+        vf_lr_decay = vf_lr_decay,
     )
     wandb.watch((policy, policy_updater.value_net_tail), log='all', log_freq=20)
 

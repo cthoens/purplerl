@@ -15,7 +15,7 @@ from purplerl.policy import PPO
 
 
 class Trainer:
-    EXPERIENCE = "Sample Trajectories"
+    EXPERIENCE = "Experience"
     ENVIRONMENT = "Env"
     POLICY = "Policy"
     TRAINER = "Trainer"
@@ -30,6 +30,7 @@ class Trainer:
     EVAL_TIME = "Eval Time"
     LESSON = "lesson"
     LESSON_START_EPOCH = "lesson_start_epoch"
+    CP_MEAN_RETUNR_EMA = "mean_return_ema"
     EPOCH = "epoch"
 
     def __init__(self,
@@ -124,7 +125,7 @@ class Trainer:
                 wandb.log(copy.deepcopy(self.all_stats), step=self.epoch)
                 self.log_to_console()
 
-                if self.policy_updater.lr_factor < 0.0001:
+                if self.policy_updater.policy_lr_factor < 0.001:
                     wandb.alert(
                         title='Learning rate collapsed',
                         text=f'Learning rate collapsed',
@@ -308,6 +309,7 @@ class Trainer:
         if self.resume_lesson is None:
             self.lesson = trainer_state.get(self.LESSON, 0)
             self.lesson_start_epoch = trainer_state.get(self.LESSON_START_EPOCH, 0)
+            self.mean_return_ema = trainer_state.get(self.CP_MEAN_RETUNR_EMA, -1.0)
             self.env_manager.set_lesson(self.lesson)
             self.own_stats[self.LESSON] = self.lesson
         else:
@@ -318,6 +320,7 @@ class Trainer:
         state_dict = {
             self.EPOCH: self.epoch,
             self.LESSON: self.lesson,
-            self.LESSON_START_EPOCH: self.lesson_start_epoch
+            self.LESSON_START_EPOCH: self.lesson_start_epoch,
+            self.CP_MEAN_RETUNR_EMA: self.mean_return_ema
         }
         return state_dict
