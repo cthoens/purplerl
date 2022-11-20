@@ -315,10 +315,10 @@ def run(dev_mode:bool = False, resume_lesson: int = None, resume_checkpoint: str
         "entropy_factor": 0.0,
 
         "policy_kl_lower_min": 0.85,
-        "policy_kl_upper_target": 1.30,
-        "policy_kl_upper_max": 1.40,
+        "policy_kl_upper_target": 1.50,
+        "policy_kl_upper_max": 1.80,
         "policy_valid_kl_lower_bound": 0.95,
-        "policy_shifting_right_way_scale": 0.1,
+        "policy_shifting_right_way_scale": 0.001,
 
         "policy_lr_decay": 0.90,
         "policy_initial_lr": 5e-5,
@@ -329,7 +329,7 @@ def run(dev_mode:bool = False, resume_lesson: int = None, resume_checkpoint: str
         # vf update
         "vf_lr_decay": 0.90,
         "vf_initial_lr": 1e-4,
-        "vf_update_epochs" : 50,
+        "vf_update_epochs" : 60,
         "vf_update_batch_size":  60,
 
         # env

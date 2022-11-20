@@ -155,6 +155,7 @@ class PPO():
     ABS_KL_UPPER = "Abs KL Upper"
     ABS_KL_MEAN = "Abs KL Mean"
     ABS_KL_STD = "Abs KL Std"
+    ABS_KL_MIN = "Abs KL Min"
     ABS_KL_MAX = "Abs KL Max"
 
     def __init__(self,
@@ -295,6 +296,7 @@ class PPO():
         is_backtrack_candidate_state = True
         update_is_perfect = False
         update_was_perfect = False
+        consecutive_backtracks = 0
 
         class Phase(Enum):
             DROP = 1,
@@ -350,10 +352,11 @@ class PPO():
                     #else:
                     batch_policy_loss, policy_net_penality, kl, clip_factor, entropy = self._policy_loss(logp_old, encoded_obs, act, adv)
 
+                    batch_abs_kl = batch_policy_loss * -1.0 * self.abs_kl_sign[batch_range].cuda()
+                    batch_policy_loss[batch_abs_kl >= math.log(self.policy_kl_upper_target)] *= -1.0
                     if not update_is_perfect:
-                        shifted_right_way = (batch_policy_loss * -1.0 * self.abs_kl_sign[batch_range].cuda()) < 0.0
-                        batch_policy_loss[shifted_right_way] *= self.policy_shifting_right_way_scale
-                        del shifted_right_way
+                        batch_policy_loss[batch_abs_kl < 0.0] *= self.policy_shifting_right_way_scale
+                    del batch_abs_kl
 
                     self.kl_merged[batch_range] = kl.detach().cpu()
                     policy_loss_total += batch_policy_loss.sum().detach()
@@ -381,19 +384,24 @@ class PPO():
                     del backprop_policy_loss
                 # end for: iterate through dataset batches
 
+                epoch_kl = self.kl
+                epoch_abs_kl = epoch_kl.flatten() * self.abs_kl_sign
+                epoch_abs_kl_min = epoch_abs_kl.min().item()
+                epoch_abs_kl_mean = epoch_abs_kl.mean().item()
+                epoch_abs_kl_std = epoch_abs_kl.std().item()
+                epoch_abs_kl_max = epoch_abs_kl.max().item()
+                epoch_abs_kl_lower = math.exp(epoch_abs_kl_mean - epoch_abs_kl_std)
+                epoch_abs_kl_upper = math.exp(epoch_abs_kl_mean + epoch_abs_kl_std)
+
                 if is_first_epoch:
                     backtrack_point = self._policy_update_checkpoint()
+                    backtrack_point["prev_epoch_abs_kl_lower"] = epoch_abs_kl_lower
+                    backtrack_point["prev_epoch_abs_kl_upper"] = epoch_abs_kl_upper
+                    backtrack_point["update_epoch"] = update_epoch
                     valid_state_cp = backtrack_point
                     self.policy_optimizer.step()
 
                     continue
-
-                epoch_kl = self.kl
-                epoch_abs_kl = epoch_kl.flatten() * self.abs_kl_sign
-                epoch_abs_kl_mean = epoch_abs_kl.mean().item()
-                epoch_abs_kl_std = epoch_abs_kl.std().item()
-                epoch_abs_kl_lower = math.exp(epoch_abs_kl_mean - epoch_abs_kl_std)
-                epoch_abs_kl_upper = math.exp(epoch_abs_kl_mean + epoch_abs_kl_std)
 
                 if previous_was_backtrack:
                     # Validation epoch is skipped if the last_upate_epoch was backtracked
@@ -448,17 +456,17 @@ class PPO():
                 elif phase == Phase.RISE:
                     print(f"↑ ", end="")
                 # END: Check if policy is oscylating
-                is_valid_end_state = is_valid_end_state and not policy_oscilating
+                is_valid_end_state = is_valid_end_state and not policy_oscilating and phase == Phase.RISE
 
-                is_lr_inc_epoch = is_lr_inc_epoch and (not update_is_perfect or update_was_perfect)
+                is_lr_inc_epoch = is_lr_inc_epoch and phase == Phase.RISE and (not update_is_perfect or update_was_perfect)
                 if update_is_perfect and not update_was_perfect:
                     self._dec_policy_lr_factor()
                 update_was_perfect = update_was_perfect or update_is_perfect
 
                 if is_valid_end_state:
-                    print(f"* {epoch_abs_kl_lower:.4f} {epoch_abs_kl_upper:.4f}", end="")
+                    print(f"{update_epoch:2}: *{epoch_abs_kl_lower:.4f} {epoch_abs_kl_upper:.4f}   {math.exp(epoch_abs_kl_min):.4f} {math.exp(epoch_abs_kl_max):.4f}", end="")
                 else:
-                    print(f"  {epoch_abs_kl_lower:.4f} {epoch_abs_kl_upper:.4f}", end="")
+                    print(f"{update_epoch:2}:  {epoch_abs_kl_lower:.4f} {epoch_abs_kl_upper:.4f}   {math.exp(epoch_abs_kl_min):.4f} {math.exp(epoch_abs_kl_max):.4f}", end="")
 
                 if kl_out_of_bounds:
                     if kl_upper_out_of_bounds:
@@ -490,20 +498,25 @@ class PPO():
                     self._load_policy_update_checkpoint(backtrack_point)
                     prev_epoch_abs_kl_lower = backtrack_point["prev_epoch_abs_kl_lower"]
                     prev_epoch_abs_kl_upper = backtrack_point["prev_epoch_abs_kl_upper"]
+                    print(f"BT: {backtrack_point['update_epoch']}")
                     backtrack_count += 1
+                    consecutive_backtracks += 1
 
-                    if backtrack_count==4 or is_last_update_epoch:
+                    if consecutive_backtracks>=3 or is_last_update_epoch:
+                        self._inc_policy_lr_factor(decay_revert_steps=2)
                         # In the next epoch only statitics will be updated, but no parameters. This
                         # is not necessary if we backtracked just before that
                         return
                     else:
                         continue
+                consecutive_backtracks = 0
 
                 if not is_validate_epoch:
                     if is_backtrack_candidate_state:
                         backtrack_point = self._policy_update_checkpoint()
-                        backtrack_point["prev_epoch_abs_kl_lower"] = prev_epoch_abs_kl_lower
-                        backtrack_point["prev_epoch_abs_kl_upper"] = prev_epoch_abs_kl_upper
+                        backtrack_point["prev_epoch_abs_kl_lower"] = epoch_abs_kl_lower
+                        backtrack_point["prev_epoch_abs_kl_upper"] = epoch_abs_kl_upper
+                        backtrack_point["update_epoch"] = update_epoch
                     self.policy_optimizer.step()
 
                 prev_epoch_abs_kl_upper = epoch_abs_kl_upper
@@ -511,29 +524,28 @@ class PPO():
 
                 if is_valid_end_state and is_backtrack_candidate_state:
                     has_updated = True
-                    if is_backtrack_candidate_state:
-                        valid_state_cp = backtrack_point
-                    else:
-                        valid_state_cp = self._policy_update_checkpoint()
+                    valid_state_cp = backtrack_point
                     self.stats[self.POLICY_UPDATE_EPOCHS] += 1
                     self.stats[self.ABS_KL_LOWER] = epoch_abs_kl_lower
                     self.stats[self.ABS_KL_UPPER] = epoch_abs_kl_upper
                     self.stats[self.ABS_KL_MEAN] = math.exp(epoch_abs_kl_mean)
                     self.stats[self.ABS_KL_STD] = math.exp(epoch_abs_kl_std)
-                    self.stats[self.ABS_KL_MAX] = math.exp(epoch_abs_kl.max().item())
+                    self.stats[self.ABS_KL_MIN] = math.exp(epoch_abs_kl_min)
+                    self.stats[self.ABS_KL_MAX] = math.exp(epoch_abs_kl_max)
                     self.stats[self.POLICY_LOSS] = policy_loss_total.item() / self.experience.buffer_size
                     self.stats[self.CLIP_FACTOR] = clip_factor_total.item() / self.experience.buffer_size
 
                 if target_reached and has_updated:
                     break
         finally:
-            if not is_backtrack_candidate_state:
+            if not is_valid_end_state:
                 self._load_policy_update_checkpoint(valid_state_cp)
+                print(f"BT: {valid_state_cp['update_epoch']}")
             else:
                 self._inc_policy_lr_factor()
             if not has_updated:
                 print("!***")
-                self._dec_policy_lr_factor(decy_steps = 1.0)
+                self._dec_policy_lr_factor(decy_steps = 2.0)
 
 
 
@@ -563,9 +575,8 @@ class PPO():
         return loss, output_penality_sum, kl, clip_factor, entropy
 
 
-    def _inc_policy_lr_factor(self):
+    def _inc_policy_lr_factor(self, decay_revert_steps = 5):
         # find factor such that applying applying it decay_revert_steps times reverts one decay step
-        decay_revert_steps = 5
         factor = (1.0 / self.policy_lr_decay)**(1/decay_revert_steps)
 
         self.policy_lr_factor *= factor
@@ -739,6 +750,7 @@ class VFOptimizer():
         previous_was_backtrack = False
         backtrack_count = 0
         epochs_since_backtrack = 0
+        consecutive_backtracks = 0
 
         batch_start = 0
         for obs in self.obs_loader:
@@ -856,16 +868,18 @@ class VFOptimizer():
             if backtrack:
                 self._load_vf_update_checkpoint(backtrack_point)
                 backtrack_count += 1
+                consecutive_backtracks += 1
 
                 if is_last_update_epoch:
                     # In the next epoch only statitics will be updated, but no parameters. This
                     # is not necessary if we backtracked just before that
                     return
 
-                if backtrack_count==self.vf_update_epochs // 2:
+                if consecutive_backtracks>=self.vf_update_epochs // 2:
                     return
                 else:
                     continue
+            consecutive_backtracks = 0
 
             if not is_validate_epoch:
                 backtrack_point = self._vf_update_checkpoint()
@@ -905,9 +919,6 @@ class VFOptimizer():
         lr = self.vf_initial_lr * self.vf_lr_factor
         for group in self.vf_optimizer.param_groups:
             group['lr'] = lr
-
-
-
 
 
     def _vf_update_checkpoint(self):
