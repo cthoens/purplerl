@@ -250,10 +250,10 @@ class RobotArmObsEncoder(torch.nn.Module):
         enc_obs = self._forward(obs)
         enc_obs = self.enc_obs_relu(enc_obs)
         out = enc_obs
-        #out = self.mlp(enc_obs)
-        #if self.planner_skip_connection:
-        #    out[:, :self.num_combined_obs_outputs] += self._training_and_goal_obs(enc_obs)
-        #out = self.skip_relu(out)
+        out = self.mlp(enc_obs)
+        if self.planner_skip_connection:
+            out[:, :self.num_combined_obs_outputs] += self._training_and_goal_obs(enc_obs)
+        out = self.skip_relu(out)
 
         # restore the buffer dimension
         return out
@@ -314,22 +314,22 @@ def run(dev_mode:bool = False, resume_lesson: int = None, resume_checkpoint: str
         "clip_ratio": 0.03,
         "entropy_factor": 0.0,
 
-        "policy_kl_lower_min": 0.85,
+        "policy_kl_lower_min": 0.60,
         "policy_kl_upper_target": 1.50,
-        "policy_kl_upper_max": 1.80,
+        "policy_kl_upper_max": 2.00,
         "policy_valid_kl_lower_bound": 0.95,
         "policy_shifting_right_way_scale": 0.001,
 
         "policy_lr_decay": 0.90,
-        "policy_initial_lr": 5e-5,
+        "policy_initial_lr": 1e-6,
         "policy_update_epochs" : 40,
         "policy_update_batch_size":  15,
         "policy_update_batch_count": 4,
 
         # vf update
         "vf_lr_decay": 0.90,
-        "vf_initial_lr": 1e-4,
-        "vf_update_epochs" : 60,
+        "vf_initial_lr": 1e-6,
+        "vf_update_epochs" : 40,
         "vf_update_batch_size":  60,
 
         # env
@@ -353,11 +353,11 @@ def run(dev_mode:bool = False, resume_lesson: int = None, resume_checkpoint: str
     split_config = base_config.copy()
     split_config.update({
         "obs_encoder_outputs": 128,
-        "planner_layers": [],
-        "panner_outputs": 0,
+        "planner_layers": [4096, 2048],
+        "panner_outputs": 4096,
         "planner_skip_connection": False,
-        "policy_split_layers": [4096, 2048, 4096],
-        "value_net_split_layers": [4096, 2048, 4096],
+        "policy_split_layers": [2048, 4096],
+        "value_net_split_layers": [],
     })
 
     config = split_config

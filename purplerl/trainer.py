@@ -241,6 +241,7 @@ class Trainer:
                 encoded_obs = self.policy.obs_encoder(obs)
                 act_dist = self.policy.action_dist(encoded_obs = encoded_obs)
                 act = act_dist.sample()
+                logp = act_dist.log_prob(act).sum(-1)
                 action_mean_entropy[step, ...] = act_dist.entropy()
                 self.timig_stats[self.DECISION_TIME] += time.time() - decision_time
 
@@ -252,7 +253,7 @@ class Trainer:
                 experience_time = time.time()
                 # Note: Always call pocliy_updater first so it can use experience.next_step_index
                 self.policy_updater.step(encoded_obs)
-                self.experience.step(obs, act, rew)
+                self.experience.step(obs, act, logp, rew)
                 self.policy_updater.end_episode(done)
                 self.experience.end_episode(done, success)
                 self.timig_stats[self.EXPERIENCE_TIME] += time.time() - experience_time

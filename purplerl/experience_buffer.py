@@ -62,6 +62,7 @@ class ExperienceBuffer:
         # Stored data
         self.obs = torch.zeros(buffer_size, num_envs, *obs_shape, **self.tensor_args)
         self.action = torch.zeros(buffer_size, num_envs, *act_shape, **self.tensor_args)
+        self.action_logp = torch.zeros(buffer_size, num_envs, **self.tensor_args)
         # The extra slot at the end of used in buffer_full()
         self.step_reward_full = np.zeros((buffer_size+1, num_envs), dtype=np.float32)
         self.step_reward = self.step_reward_full[:-1,...]
@@ -72,15 +73,17 @@ class ExperienceBuffer:
 
         self.obs_merged = self.obs.reshape(buffer_size * num_envs, *obs_shape)
         self.action_merged = self.action.reshape(buffer_size * num_envs, *act_shape)
+        self.action_logp_merged = self.action_logp.reshape(buffer_size * num_envs)
         self.discounted_reward_merged = self.discounted_reward.reshape(-1)
 
-    def step(self, obs: torch.Tensor, act: torch.Tensor, reward: torch.Tensor):
+    def step(self, obs: torch.Tensor, act: torch.Tensor, act_logp: torch.Tensor, reward: torch.Tensor):
         # Update in episode data
         self.ep_cum_reward += reward
 
         # Update overall data
         self.obs[self.next_step_index, :] = obs
         self.action[self.next_step_index, :] = act
+        self.action_logp[self.next_step_index, :] = act_logp
         self.step_reward[self.next_step_index, :] = reward
         self.next_step_index += 1
 
