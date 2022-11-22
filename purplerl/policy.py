@@ -27,6 +27,33 @@ def mlp(sizes, activation=nn.ReLU, output_activation=nn.Identity):
     return nn.Sequential(*layers)
 
 
+class LearningRateManager:
+    def __init__(self, optimizer, initial_lr, decay, decay_revert_steps, min_factor=0.0) -> None:
+        self.optimizer = optimizer
+        self.initial_lr =  initial_lr
+        self.min_factor = min_factor
+        self.factor = 1.0
+        self.decay = decay
+        self.decay_revert_steps = decay_revert_steps
+
+    def inc(self):
+        # find factor such that applying applying it decay_revert_steps times reverts one decay step
+        factor = (1.0 / self.decay)**(1/self.decay_revert_steps)
+
+        self.factor *= factor
+        lr = self.initial_lr * self.factor
+        for group in self.optimizer.param_groups:
+            group['lr'] = lr
+
+
+    def dec(self, decy_steps = 1.0):
+        self.factor *= max(self.factor * (self.decay**decy_steps), 0.01)
+        lr = self.initial_lr * self.factor
+        for group in self.optimizer.param_groups:
+            group['lr'] = lr
+
+
+
 class StochasticPolicy(nn.Module):
     def __init__(self, obs_encoder: torch.nn.Sequential):
         super().__init__()
@@ -196,9 +223,6 @@ class PPO():
         self.value_net_tail = value_net_tail
         self.clip_ratio = clip_ratio
         self.adv_lambda = adv_lambda
-        self.policy_initial_lr = policy_initial_lr
-        self.policy_lr_factor = 1.0
-        self.policy_lr_decay = policy_lr_decay
         self.entropy_factor = entropy_factor
 
         self.policy_kl_lower_min = policy_kl_lower_min
@@ -215,18 +239,17 @@ class PPO():
         self.policy_update_epochs = policy_update_epochs
         self.policy_update_batch_size = policy_update_batch_size * experience.num_envs
         self.policy_optimizer = Adam([
-            {'params': self.policy.action_dist_net_tail.parameters(), 'lr': self.policy_initial_lr},
+            {'params': self.policy.action_dist_net_tail.parameters(), 'lr': policy_initial_lr},
         ])
+        self.policy_lr = LearningRateManager(self.policy_optimizer, policy_initial_lr, policy_lr_decay, decay_revert_steps=10)
 
-        self.vf_initial_lr = vf_initial_lr
-        self.vf_lr_factor = 1.0
-        self.vf_lr_decay = vf_lr_decay
         self.vf_update_epochs = vf_update_epochs
         self.vf_update_batch_size = vf_update_batch_size
         self.vf_optimizer = Adam([
-            {'params': self.policy.obs_encoder.parameters(), 'lr': self.vf_initial_lr},
-            {'params': self.value_net_tail.parameters(), 'lr': self.vf_initial_lr}
+            {'params': self.policy.obs_encoder.parameters(), 'lr': vf_initial_lr},
+            {'params': self.value_net_tail.parameters(), 'lr': vf_initial_lr}
         ])
+        self.vf_lr = LearningRateManager(self.vf_optimizer, vf_initial_lr, vf_lr_decay, decay_revert_steps=10, min_factor=0.01)
 
         suffix = ""
         self.VF_UPDATE_EPOCHS = f"VF Update Epochs {suffix}"
@@ -292,8 +315,8 @@ class PPO():
 
         has_updated = False
         policy_is_valid_end_state, vf_is_valid_end_state = False, False
-        policy_gen = self._update_policy()
-        vf_gen = self._update_vf()
+        policy_gen = self._update_policy(self.policy_lr)
+        vf_gen = self._update_vf(self.vf_lr)
 
         try:
             for update_epoch in range(self.policy_update_epochs+1):
@@ -373,18 +396,18 @@ class PPO():
                 self._load_vf_update_checkpoint(vf_valid_state_cp)
                 print(f"BT: {policy_valid_state_cp['update_epoch']}")
             else:
-                self._inc_policy_lr_factor()
-                self._inc_vf_lr_factor()
+                self.policy_lr.inc()
+                self.vf_lr.inc()
 
             if not has_updated:
                 print("!***")
-                self._dec_policy_lr_factor(decy_steps = 2.0)
-                self._dec_vf_lr_factor(decy_steps = 2.0)
+                self.policy_lr.dec(decy_steps = 2.0)
+                self.vf_lr.dec(decy_steps = 2.0)
 
 
-    def _update_policy(self):
+    def _update_policy(self, lr: LearningRateManager):
         self.stats[self.POLICY_UPDATE_EPOCHS] = 0
-        self.stats[self.POLICY_LR_FACTOR] = self.policy_lr_factor
+        self.stats[self.POLICY_LR_FACTOR] = lr.factor
 
         prev_improvement_lower = 1.0
         epochs_since_oscilating = 0
@@ -486,7 +509,7 @@ class PPO():
             # END: Check if policy is oscylating
             is_lr_inc_epoch = is_lr_inc_epoch and (phase == Phase.RISE or phase == Phase.DROP) and (not update_is_perfect or update_was_perfect)
             if update_is_perfect and not update_was_perfect:
-                self._dec_policy_lr_factor()
+                lr.dec()
             update_was_perfect = update_was_perfect or update_is_perfect
 
             if is_valid_end_state:
@@ -497,29 +520,29 @@ class PPO():
 
             if improvement_out_of_bounds:
                 if improvement_upper_out_of_bounds:
-                    self._dec_policy_lr_factor(decy_steps = 1.0)
-                    print(f"   ↓{self.policy_lr_factor:.3f} ", end="")
+                    lr.dec(decy_steps = 1.0)
+                    print(f"   ↓{self.policy_lr.factor:.3f} ", end="")
                 else:
-                    self._dec_policy_lr_factor(decy_steps = 2.0)
-                    print(f"  ↓↓{self.policy_lr_factor:.3f} ", end="")
+                    lr.dec(decy_steps = 2.0)
+                    print(f"  ↓↓{self.policy_lr.factor:.3f} ", end="")
                 can_continue = False
                 is_valid_end_state = False
                 continue
 
             elif is_oscilating:
-                self._dec_policy_lr_factor(decy_steps = 1.0)
+                lr.dec(decy_steps = 1.0)
                 epochs_since_oscilating = -1
-                print(f"    {self.policy_lr_factor:.3f} ", end="")
+                print(f"    {self.policy_lr.factor:.3f} ", end="")
 
             elif is_lr_inc_epoch:
-                self._inc_policy_lr_factor()
-                print(f"    {self.policy_lr_factor:.3f}↑", end="")
+                lr.inc()
+                print(f"    {self.policy_lr.factor:.3f}↑", end="")
 
             else:
-                print(f"    {self.policy_lr_factor:.3f} ", end="")
+                print(f"    {self.policy_lr.factor:.3f} ", end="")
 
             epochs_since_oscilating+=1
-            self.stats[self.POLICY_LR_FACTOR] = self.policy_lr_factor
+            self.stats[self.POLICY_LR_FACTOR] = self.policy_lr.factor
 
             if not is_validate_epoch:
                 self.policy_backtrack_point = self._policy_update_checkpoint()
@@ -547,9 +570,9 @@ class PPO():
         yield can_continue, is_valid_end_state, target_reached
 
 
-    def _update_vf(self):
+    def _update_vf(self, lr:LearningRateManager):
         self.stats[self.VF_UPDATE_EPOCHS] = 0
-        self.stats[self.VF_LR_FACTOR] = self.vf_lr_factor
+        self.stats[self.VF_LR_FACTOR] = lr.factor
 
         prev_improvement_lower = 1.0
         epochs_since_oscilation = 0
@@ -650,7 +673,7 @@ class PPO():
             # END: Check if vf is oscylating
             is_lr_inc_epoch = is_lr_inc_epoch and (phase == Phase.RISE or phase == Phase.DROP) and (not update_is_perfect or update_was_perfect)
             if update_is_perfect and not update_was_perfect:
-                self._dec_vf_lr_factor()
+                lr.dec()
             update_was_perfect = update_was_perfect or update_is_perfect
 
             if is_valid_end_state:
@@ -661,29 +684,29 @@ class PPO():
 
             if improvement_out_of_bounds:
                 if improvement_upper_out_of_bounds:
-                    self._dec_vf_lr_factor(decy_steps = 1.0)
-                    print(f"   ↓{self.vf_lr_factor:.3f}", end="")
+                    lr.dec(decy_steps = 1.0)
+                    print(f"   ↓{lr.factor:.3f}", end="")
                 else:
-                    self._dec_vf_lr_factor(decy_steps = 2.0)
-                    print(f"  ↓↓{self.vf_lr_factor:.3f}", end="")
+                    lr.dec(decy_steps = 2.0)
+                    print(f"  ↓↓{lr.factor:.3f}", end="")
                 can_continue = False
                 is_valid_end_state = False
                 continue
 
             elif is_oscilating:
-                self._dec_vf_lr_factor(decy_steps = 1.0)
+                lr.dec(decy_steps = 1.0)
                 epochs_since_oscilation = -1
-                print(f"    {self.vf_lr_factor:.3f}", end="")
+                print(f"    {lr.factor:.3f}", end="")
 
             elif is_lr_inc_epoch:
-                self._inc_vf_lr_factor()
-                print(f"    {self.vf_lr_factor:.3f}↑", end="")
+                lr.inc()
+                print(f"    {lr.factor:.3f}↑", end="")
 
             else:
-                print(f"    {self.vf_lr_factor:.3f}", end="")
+                print(f"    {lr.factor:.3f}", end="")
 
             epochs_since_oscilation+=1
-            self.stats[self.VF_LR_FACTOR] = self.vf_lr_factor
+            self.stats[self.VF_LR_FACTOR] = lr.factor
 
             if not is_validate_epoch:
                 self.vf_backtrack_point = self._vf_update_checkpoint()
@@ -765,23 +788,6 @@ class PPO():
 
         return batch_value_loss
 
-
-    def _inc_policy_lr_factor(self, decay_revert_steps = 10):
-        # find factor such that applying applying it decay_revert_steps times reverts one decay step
-        factor = (1.0 / self.policy_lr_decay)**(1/decay_revert_steps)
-
-        self.policy_lr_factor *= factor
-        lr = self.policy_initial_lr * self.policy_lr_factor
-        for group in self.policy_optimizer.param_groups:
-            group['lr'] = lr
-
-
-    def _dec_policy_lr_factor(self, decy_steps = 1.0):
-        self.policy_lr_factor *= self.policy_lr_decay**decy_steps
-        lr = self.policy_initial_lr * self.policy_lr_factor
-        for group in self.policy_optimizer.param_groups:
-            group['lr'] = lr
-
     def value_estimate(self, encoded_obs):
         # Note: Clamped to plausible range
         return self.value_net_tail(encoded_obs).squeeze(-1).clamp(-1.0, 1.0)
@@ -829,32 +835,32 @@ class PPO():
         checkpoint = checkpoint["policy_updater"]
         self.policy_optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
 
-        lr = self.policy_initial_lr * self.policy_lr_factor
+        lr = self.policy_lr.initial_lr * self.policy_lr.factor
         for group in self.policy_optimizer.param_groups:
             group['lr'] = lr
 
     def checkpoint(self):
         return {
             'optimizer_state_dict': self.policy_optimizer.state_dict(),
-            'initial_lr': self.policy_initial_lr,
-            'lr_factor': self.policy_lr_factor,
+            'initial_lr': self.policy_lr.initial_lr,
+            'lr_factor': self.policy_lr.factor,
 
             'value_net_state_dict': {k: v.cpu() for k, v in self.value_net_tail.state_dict().items()},
             'vf_optimizer_state_dict': self.vf_optimizer.state_dict(),
-            'vf_initial_lr': self.vf_initial_lr,
-            'vf_lr_factor': self.vf_lr_factor,
+            'vf_initial_lr': self.vf_lr.initial_lr,
+            'vf_lr_factor': self.vf_lr.factor,
         }
 
 
     def load_checkpoint(self, checkpoint):
         self.policy_optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
-        self.policy_initial_lr = checkpoint['initial_lr']
-        self.policy_lr_factor = checkpoint['lr_factor']
+        self.policy_lr.initial_lr = checkpoint['initial_lr']
+        self.policy_lr.factor = checkpoint['lr_factor']
 
         self.value_net_tail.load_state_dict(checkpoint['value_net_state_dict'])
         self.vf_optimizer.load_state_dict(checkpoint['vf_optimizer_state_dict'])
-        self.vf_initial_lr = checkpoint['vf_initial_lr']
-        self.vf_lr_factor = checkpoint['vf_lr_factor']
+        self.vf_lr.initial_lr = checkpoint['vf_initial_lr']
+        self.vf_lr.factor = checkpoint['vf_lr_factor']
 
 
 
@@ -886,24 +892,6 @@ class PPO():
             self._finish_env_path(env_idx, last_state_value_estimate[env_idx])
 
 
-    def _inc_vf_lr_factor(self):
-        # find factor such that applying applying it decay_revert_steps times reverts one decay step
-        decay_revert_steps = 10
-        factor = (1.0 / self.vf_lr_decay)**(1/decay_revert_steps)
-
-        self.vf_lr_factor *= factor
-        lr = self.vf_initial_lr * self.vf_lr_factor
-        for group in self.vf_optimizer.param_groups:
-            group['lr'] = lr
-
-
-    def _dec_vf_lr_factor(self, decy_steps = 1.0):
-        self.vf_lr_factor = max(self.vf_lr_factor * (self.vf_lr_decay**decy_steps), 0.01)
-        lr = self.vf_initial_lr * self.vf_lr_factor
-        for group in self.vf_optimizer.param_groups:
-            group['lr'] = lr
-
-
     def _vf_update_checkpoint(self):
         result = {
             'value_net_state_dict': {k: v.cpu() for k, v in self.value_net_tail.state_dict().items()},
@@ -918,7 +906,7 @@ class PPO():
         self.value_net_tail.load_state_dict(checkpoint['value_net_state_dict'])
         self.vf_optimizer.load_state_dict(checkpoint['vf_optimizer_state_dict'])
 
-        lr = self.vf_initial_lr * self.vf_lr_factor
+        lr = self.vf_lr.initial_lr * self.vf_lr.factor
         for group in self.vf_optimizer.param_groups:
             group['lr'] = lr
 

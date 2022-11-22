@@ -125,7 +125,7 @@ class Trainer:
                 wandb.log(copy.deepcopy(self.all_stats), step=self.epoch)
                 self.log_to_console()
 
-                if self.policy_updater.policy_lr_factor < 0.001:
+                if self.policy_updater.policy_lr.factor < 0.001:
                     wandb.alert(
                         title='Learning rate collapsed',
                         text=f'Learning rate collapsed',
