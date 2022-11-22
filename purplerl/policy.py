@@ -47,7 +47,7 @@ class LearningRateManager:
 
 
     def dec(self, decy_steps = 1.0):
-        self.factor *= max(self.factor * (self.decay**decy_steps), 0.01)
+        self.factor = max(self.factor * (self.decay**decy_steps), self.min_factor)
         lr = self.initial_lr * self.factor
         for group in self.optimizer.param_groups:
             group['lr'] = lr
@@ -347,7 +347,7 @@ class PPO():
 
                     #TODO
                     scale = 1.0 #if update_is_perfect else self.policy_shifting_right_way_scale
-                    batch_policy_loss = self._policy_loss(batch_range, scale, logp_old, encoded_obs.detach(), act, adv)
+                    batch_policy_loss = self._policy_loss(batch_range, scale, logp_old, encoded_obs, act, adv)
 
                     # free up memory for the value function update
                     del logp_old
@@ -366,9 +366,9 @@ class PPO():
                     del encoded_obs
 
                     if not is_validate_epoch:
-                        batch_policy_loss.backward()
-                        batch_value_loss.backward()
-                        #(batch_policy_loss + batch_value_loss).backward()
+                        #batch_policy_loss.backward()
+                        #batch_value_loss.backward()
+                        (batch_policy_loss + batch_value_loss).backward()
 
                     del batch_policy_loss
                     del batch_value_loss
