@@ -367,6 +367,10 @@ class PPO():
                     del adv
                     del act
 
+                    if not is_validate_epoch:
+                        batch_policy_loss.backward()
+                    del batch_policy_loss
+
 
                     # VF Update
                     # ----------
@@ -383,11 +387,9 @@ class PPO():
                     del encoded_obs
 
                     if not is_validate_epoch:
-                        batch_policy_loss.backward()
-                        del batch_policy_loss
                         batch_value_loss.backward()
                         #(batch_policy_loss + batch_value_loss).backward()
-                        del batch_value_loss
+                    del batch_value_loss
 
                 # end for: iterate through dataset batches
 
