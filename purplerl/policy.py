@@ -175,15 +175,15 @@ class ContinuousPolicy(StochasticPolicy):
 
 class PPO():
     CLIP_FACTOR = "Clip Factor"
-    POLICY_UPDATE_EPOCHS = "Policy Update Epochs"
-    POLICY_LR_FACTOR = "Policy LR Factor"
+    UPDATE_EPOCHS = "Update Epochs"
+    LR_FACTOR = "LR Factor"
     POLICY_LOSS = "Policy Loss"
-    ABS_KL_LOWER = "Abs KL Lower"
-    ABS_KL_UPPER = "Abs KL Upper"
-    ABS_KL_MEAN = "Abs KL Mean"
-    ABS_KL_STD = "Abs KL Std"
-    ABS_KL_MIN = "Abs KL Min"
-    ABS_KL_MAX = "Abs KL Max"
+    IMP_LOWER = "Imp Lower"
+    IMP_UPPER = "Imp Upper"
+    IMP_MEAN = "Imp Mean"
+    IMP_STD = "Imp Std"
+    IMP_MIN = "Imp Min"
+    IMP_MAX = "Imp Max"
 
     def __init__(self,
         cfg: dict,
@@ -195,18 +195,24 @@ class PPO():
         clip_ratio: float,
         entropy_factor: float,
 
-        # bounds
-        policy_kl_lower_min: float,
-        policy_kl_upper_target: float,
-        policy_kl_upper_max: float,
-        policy_valid_kl_lower_bound: float,
-        policy_shifting_right_way_scale: float,
+        # policy bounds
+        policy_imp_min: float,
+        policy_imp_upper_target: float,
+        policy_imp_max: float,
+        policy_valid_imp_lower_bound: float,
+        policy_neg_lower_imp_scale_scale: float,
 
         # policy lr
         policy_initial_lr: float,
         policy_lr_decay: float,
         policy_update_batch_size: int,
         policy_update_epochs: int,
+
+        # vf bounds
+        vf_imp_min: float,
+        vf_imp_upper_target: float,
+        vf_imp_max: float,
+        vf_valid_imp_lower_bound: float,
 
         # vf lr
         vf_initial_lr: float,
@@ -225,23 +231,24 @@ class PPO():
         self.adv_lambda = adv_lambda
         self.entropy_factor = entropy_factor
 
-        self.policy_kl_lower_min = policy_kl_lower_min
-        self.policy_kl_upper_target = policy_kl_upper_target
-        self.policy_kl_upper_max = policy_kl_upper_max
-        self.policy_valid_kl_lower_bound = policy_valid_kl_lower_bound
-        self.policy_shifting_right_way_scale = policy_shifting_right_way_scale
+        self.policy_imp_min = policy_imp_min
+        self.policy_imp_upper_target = policy_imp_upper_target
+        self.policy_imp_max = policy_imp_max
+        self.policy_valid_imp_lower_bound = policy_valid_imp_lower_bound
+        self.policy_neg_lower_imp_scale = policy_neg_lower_imp_scale_scale
 
-        self.vf_kl_lower_min = -100
-        self.vf_kl_upper_target = 1.8
-        self.vf_kl_upper_max = 100
-        self.vf_valid_kl_lower_bound = 0.80
+        self.vf_imp_min = vf_imp_min
+        self.vf_imp_upper_target = vf_imp_upper_target
+        self.vf_imp_max = vf_imp_max
+        self.vf_valid_imp_lower_bound = vf_valid_imp_lower_bound
 
         self.policy_update_epochs = policy_update_epochs
         self.policy_update_batch_size = policy_update_batch_size * experience.num_envs
         self.policy_optimizer = Adam([
+            {'params': self.policy.obs_encoder.parameters(), 'lr': vf_initial_lr},
             {'params': self.policy.action_dist_net_tail.parameters(), 'lr': policy_initial_lr},
         ])
-        self.policy_lr = LearningRateManager(self.policy_optimizer, policy_initial_lr, policy_lr_decay, decay_revert_steps=10)
+        self.policy_lr = LearningRateManager(self.policy_optimizer, policy_initial_lr, policy_lr_decay, decay_revert_steps=10, min_factor=0.001)
 
         self.vf_update_epochs = vf_update_epochs
         self.vf_update_batch_size = vf_update_batch_size
@@ -250,6 +257,7 @@ class PPO():
             {'params': self.value_net_tail.parameters(), 'lr': vf_initial_lr}
         ])
         self.vf_lr = LearningRateManager(self.vf_optimizer, vf_initial_lr, vf_lr_decay, decay_revert_steps=10, min_factor=0.01)
+        self.alternator = 0
 
         suffix = ""
         self.VF_UPDATE_EPOCHS = f"VF Update Epochs {suffix}"
@@ -277,6 +285,8 @@ class PPO():
         self.abs_kl_sign = torch.zeros(experience.buffer_size * experience.num_envs, requires_grad=False, pin_memory=cfg.pin, **experience.tensor_args)
         self.policy_loss = torch.zeros(experience.buffer_size * experience.num_envs, requires_grad=False, pin_memory=cfg.pin, **experience.tensor_args)
         self.clip_factor = torch.zeros(experience.buffer_size * experience.num_envs, requires_grad=False, pin_memory=cfg.pin, **experience.tensor_args)
+        self.policy_imp = torch.zeros(experience.buffer_size * experience.num_envs, requires_grad=False, pin_memory=cfg.pin, **experience.tensor_args)
+        self.vf_imp = torch.zeros(experience.buffer_size * experience.num_envs, requires_grad=False, pin_memory=cfg.pin, **experience.tensor_args)
 
         self.obs_loader = DataLoader(TensorDataset(self.experience.obs_merged), batch_size=self.policy_update_batch_size, pin_memory=cfg.pin)
         self.action_loader = DataLoader(TensorDataset(self.experience.action_merged), batch_size=self.policy_update_batch_size, pin_memory=cfg.pin)
@@ -315,7 +325,8 @@ class PPO():
 
         has_updated = False
         policy_is_valid_end_state, vf_is_valid_end_state = False, False
-        policy_gen = self._update_policy(self.policy_lr)
+        policy_gen = self._update_policy("Policy", epoch_improvement=self.policy_imp, lr=self.policy_lr)
+        #vf_gen = self._update_vf("VF", epoch_improvement=self.vf_imp, lr=self.vf_lr)
         vf_gen = self._update_vf(self.vf_lr)
 
         try:
@@ -345,8 +356,10 @@ class PPO():
                     # -------------
                     # Note: Calculdate even if update_policy == False to check for passive_policy_progression (see below)
 
-                    #TODO
                     scale = 1.0 #if update_is_perfect else self.policy_shifting_right_way_scale
+                    #if self.alternator%2==0:
+                    #    batch_policy_loss = self._policy_loss(batch_range, scale, logp_old, encoded_obs.detach(), act, adv)
+                    #else:
                     batch_policy_loss = self._policy_loss(batch_range, scale, logp_old, encoded_obs, act, adv)
 
                     # free up memory for the value function update
@@ -357,22 +370,33 @@ class PPO():
 
                     # VF Update
                     # ----------
-                    #encoded_obs = encoded_obs.detach()
                     discounted_reward = discounted_reward[0].to(self.cfg.device, non_blocking=True)
 
-                    batch_value_loss  = self._value_loss(batch_range, encoded_obs, discounted_reward)
+                    #if self.alternator%2==0:
+                    #    batch_value_loss  = self._value_loss(batch_range, encoded_obs, discounted_reward)
+                    #else:
+                    batch_value_loss  = self._value_loss(batch_range, encoded_obs.detach(), discounted_reward)
+
+                    #self.alternator += 1
 
                     del discounted_reward
                     del encoded_obs
 
                     if not is_validate_epoch:
-                        #batch_policy_loss.backward()
-                        #batch_value_loss.backward()
-                        (batch_policy_loss + batch_value_loss).backward()
+                        batch_policy_loss.backward()
+                        del batch_policy_loss
+                        batch_value_loss.backward()
+                        #(batch_policy_loss + batch_value_loss).backward()
+                        del batch_value_loss
 
-                    del batch_policy_loss
-                    del batch_value_loss
                 # end for: iterate through dataset batches
+
+                self.stats[self.POLICY_LOSS] = self.policy_loss.mean().item()
+                self.stats[self.CLIP_FACTOR] = self.clip_factor.mean().item()
+
+                self.abs_kl_sign[:] = -1.0
+                self.abs_kl_sign[self.weight_merged<0] = 1.0
+                self.policy_imp[...] = self.kl.flatten() * self.abs_kl_sign
 
                 if update_epoch > 0: print(f"{update_epoch:2}: ", end="")
                 policy_can_continue, policy_is_valid_end_state, policy_target_reached = next(policy_gen)
@@ -405,9 +429,10 @@ class PPO():
                 self.vf_lr.dec(decy_steps = 2.0)
 
 
-    def _update_policy(self, lr: LearningRateManager):
-        self.stats[self.POLICY_UPDATE_EPOCHS] = 0
-        self.stats[self.POLICY_LR_FACTOR] = lr.factor
+    def _update_policy(self, prefix: str, epoch_improvement: torch.tensor, lr: LearningRateManager):
+        prefix += " "
+        self.stats[prefix+self.UPDATE_EPOCHS] = 0
+        self.stats[prefix+self.LR_FACTOR] = lr.factor
 
         prev_improvement_lower = 1.0
         epochs_since_oscilating = 0
@@ -426,9 +451,6 @@ class PPO():
         can_continue = True
         target_reached = False
 
-        self.abs_kl_sign[:] = -1.0
-        self.abs_kl_sign[self.weight_merged<0] = 1.0
-
         self.policy_backtrack_point = self._policy_update_checkpoint()
         self.policy_backtrack_point["prev_improvement_lower"] = 1.0
         self.policy_backtrack_point["prev_improvement_upper"] = 1.0
@@ -441,23 +463,21 @@ class PPO():
             is_validate_epoch = update_epoch == self.policy_update_epochs
             is_lr_inc_epoch = epochs_since_oscilating >= 2
 
-            epoch_kl = self.kl
-            epoch_improvement = epoch_kl.flatten() * self.abs_kl_sign
-            epoch_improvement_min = epoch_improvement.min().item()
             epoch_improvement_mean = epoch_improvement.mean().item()
             epoch_improvement_std = epoch_improvement.std().item()
-            epoch_improvement_max = epoch_improvement.max().item()
+            epoch_improvement_min = math.exp(epoch_improvement.min().item())
+            epoch_improvement_max = math.exp(epoch_improvement.max().item())
             epoch_improvement_lower = math.exp(epoch_improvement_mean - epoch_improvement_std)
             epoch_improvement_upper = math.exp(epoch_improvement_mean + epoch_improvement_std)
 
             update_is_perfect = epoch_improvement_lower >= 1.0 and epoch_improvement_upper > 1.0
-            improvement_lower_out_of_bounds = epoch_improvement_lower < self.policy_kl_lower_min
-            improvement_upper_out_of_bounds = epoch_improvement_upper > 1.0 and epoch_improvement_upper > self.policy_kl_upper_max
+            improvement_lower_out_of_bounds = epoch_improvement_min < self.policy_imp_min
+            improvement_upper_out_of_bounds = epoch_improvement_upper < 1.0 or epoch_improvement_max > self.policy_imp_max
             improvement_out_of_bounds = improvement_upper_out_of_bounds or improvement_lower_out_of_bounds
-            is_valid_end_state = epoch_improvement_lower >= self.policy_valid_kl_lower_bound and not improvement_out_of_bounds
-            target_reached = epoch_improvement_upper > self.policy_kl_upper_target and is_valid_end_state
+            is_valid_end_state = epoch_improvement_lower >= self.policy_valid_imp_lower_bound and not improvement_out_of_bounds
+            target_reached = epoch_improvement_upper > self.policy_imp_upper_target and is_valid_end_state
 
-            # BEGIN: Check if policy is oscylating
+            # BEGIN: Check if oscylating
             is_oscilating = False
             improvement_lower_dropped = epoch_improvement_lower < prev_improvement_lower
             improvement_lower_rose = not improvement_lower_dropped
@@ -506,7 +526,7 @@ class PPO():
                 print(f"  ", end="")
             # ---
 
-            # END: Check if policy is oscylating
+            # END: Check if oscylating
             is_lr_inc_epoch = is_lr_inc_epoch and (phase == Phase.RISE or phase == Phase.DROP) and (not update_is_perfect or update_was_perfect)
             if update_is_perfect and not update_was_perfect:
                 lr.dec()
@@ -516,15 +536,15 @@ class PPO():
                 print(f" *", end="")
             else:
                 print(f"  ", end="")
-            print(f"{epoch_improvement_lower:.4f} {epoch_improvement_upper:.4f}   {math.exp(epoch_improvement_min):.4f} {math.exp(epoch_improvement_max):.4f}", end="")
+            print(f"{epoch_improvement_lower:.4f} {epoch_improvement_upper:.4f}   {epoch_improvement_min:.4f} {epoch_improvement_max:.4f}", end="")
 
             if improvement_out_of_bounds:
                 if improvement_upper_out_of_bounds:
                     lr.dec(decy_steps = 1.0)
-                    print(f"   ↓{self.policy_lr.factor:.3f} ", end="")
+                    print(f"   ↓{lr.factor:.3f} ", end="")
                 else:
                     lr.dec(decy_steps = 2.0)
-                    print(f"  ↓↓{self.policy_lr.factor:.3f} ", end="")
+                    print(f"  ↓↓{lr.factor:.3f} ", end="")
                 can_continue = False
                 is_valid_end_state = False
                 continue
@@ -532,17 +552,17 @@ class PPO():
             elif is_oscilating:
                 lr.dec(decy_steps = 1.0)
                 epochs_since_oscilating = -1
-                print(f"    {self.policy_lr.factor:.3f} ", end="")
+                print(f"    {lr.factor:.3f} ", end="")
 
             elif is_lr_inc_epoch:
                 lr.inc()
-                print(f"    {self.policy_lr.factor:.3f}↑", end="")
+                print(f"    {lr.factor:.3f}↑", end="")
 
             else:
-                print(f"    {self.policy_lr.factor:.3f} ", end="")
+                print(f"    {lr.factor:.3f} ", end="")
 
             epochs_since_oscilating+=1
-            self.stats[self.POLICY_LR_FACTOR] = self.policy_lr.factor
+            self.stats[prefix+self.LR_FACTOR] = lr.factor
 
             if not is_validate_epoch:
                 self.policy_backtrack_point = self._policy_update_checkpoint()
@@ -555,15 +575,13 @@ class PPO():
 
             if is_valid_end_state:
                 has_updated = True
-                self.stats[self.POLICY_UPDATE_EPOCHS] += 1
-                self.stats[self.ABS_KL_LOWER] = epoch_improvement_lower
-                self.stats[self.ABS_KL_UPPER] = epoch_improvement_upper
-                self.stats[self.ABS_KL_MEAN] = math.exp(epoch_improvement_mean)
-                self.stats[self.ABS_KL_STD] = math.exp(epoch_improvement_std)
-                self.stats[self.ABS_KL_MIN] = math.exp(epoch_improvement_min)
-                self.stats[self.ABS_KL_MAX] = math.exp(epoch_improvement_max)
-                self.stats[self.POLICY_LOSS] = self.policy_loss.mean().item()
-                self.stats[self.CLIP_FACTOR] = self.clip_factor.mean().item()
+                self.stats[prefix+self.UPDATE_EPOCHS] += 1
+                self.stats[prefix+self.IMP_LOWER] = epoch_improvement_lower
+                self.stats[prefix+self.IMP_UPPER] = epoch_improvement_upper
+                self.stats[prefix+self.IMP_MEAN] = math.exp(epoch_improvement_mean)
+                self.stats[prefix+self.IMP_STD] = math.exp(epoch_improvement_std)
+                self.stats[prefix+self.IMP_MIN] = epoch_improvement_min
+                self.stats[prefix+self.IMP_MAX] = epoch_improvement_max
 
             if target_reached and has_updated:
                 break
@@ -616,11 +634,11 @@ class PPO():
             epoch_improvement_upper = epoch_improvement_mean + epoch_improvement_std
 
             update_is_perfect = epoch_improvement_lower >= 1.0 and epoch_improvement_upper > 1.0
-            improvement_lower_out_of_bounds = epoch_improvement_lower < self.vf_kl_lower_min
-            improvement_upper_out_of_bounds = epoch_improvement_upper > 1.0 and epoch_improvement_upper > self.vf_kl_upper_max
+            improvement_lower_out_of_bounds = epoch_improvement_min < self.vf_imp_min
+            improvement_upper_out_of_bounds = epoch_improvement_upper < 1.0 or epoch_improvement_max > self.vf_imp_max
             improvement_out_of_bounds = improvement_upper_out_of_bounds or improvement_lower_out_of_bounds
-            is_valid_end_state = epoch_improvement_lower >= self.vf_valid_kl_lower_bound and not improvement_out_of_bounds
-            target_reached = epoch_improvement_upper > self.vf_kl_upper_target and is_valid_end_state
+            is_valid_end_state = epoch_improvement_lower >= self.vf_valid_imp_lower_bound and not improvement_out_of_bounds
+            target_reached = epoch_improvement_upper > self.vf_imp_upper_target and is_valid_end_state
 
             # BEGIN: Check if vf is oscylating
             is_oscilating = False
@@ -748,7 +766,7 @@ class PPO():
         self.clip_factor[batch_range] = torch.as_tensor(clipped, dtype=torch.float32).cpu()
 
         batch_abs_kl = batch_policy_loss * -1.0 * self.abs_kl_sign[batch_range].to(self.cfg.device)
-        batch_policy_loss[batch_abs_kl >= math.log(self.policy_kl_upper_target)] *= -1.0
+        batch_policy_loss[batch_abs_kl >= math.log(self.policy_imp_upper_target)] *= -1.0
         if positive_shift_scale != 1.0:
             batch_policy_loss[batch_abs_kl < 0.0] *= positive_shift_scale
         del batch_abs_kl
@@ -784,7 +802,7 @@ class PPO():
         value_delta = value_net_out - discounted_reward
         self.value_delta_current[batch_range] = value_delta.detach().cpu()
 
-        batch_value_loss = torch.square(value_delta).mean() - torch.square(value_delta).std()
+        batch_value_loss = torch.sqrt(torch.square(0.8 * value_net_out + 0.2 * discounted_reward ).mean())
 
         return batch_value_loss
 
