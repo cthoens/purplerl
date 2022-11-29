@@ -273,7 +273,9 @@ class PPO():
         # the update to calculate loss statistics
         self.value_old_full = torch.zeros(experience.buffer_size+1, experience.num_envs, pin_memory=cfg.pin, dtype=config.dtype)
         self.value_old = self.value_old_full[:-1,...]
-        self.kl = torch.zeros(experience.buffer_size, experience.num_envs, pin_memory=cfg.pin, dtype=config.dtype)
+        self.kl = torch.zeros(experience.buffer_size, experience.num_envs, requires_grad=False, pin_memory=cfg.pin, dtype=config.dtype)
+        self.policy_imp = torch.zeros(experience.buffer_size * experience.num_envs, requires_grad=False, pin_memory=cfg.pin, dtype=config.dtype)
+        self.vf_imp = torch.zeros(experience.buffer_size * experience.num_envs, requires_grad=False, pin_memory=cfg.pin, dtype=config.dtype)
         self.weight = torch.zeros(experience.buffer_size, experience.num_envs, pin_memory=cfg.pin, **experience.tensor_args)
 
         self.value_old_merged = self.value_old.reshape(-1)
@@ -285,8 +287,6 @@ class PPO():
         self.abs_kl_sign = torch.zeros(experience.buffer_size * experience.num_envs, requires_grad=False, pin_memory=cfg.pin, **experience.tensor_args)
         self.policy_loss = torch.zeros(experience.buffer_size * experience.num_envs, requires_grad=False, pin_memory=cfg.pin, **experience.tensor_args)
         self.clip_factor = torch.zeros(experience.buffer_size * experience.num_envs, requires_grad=False, pin_memory=cfg.pin, **experience.tensor_args)
-        self.policy_imp = torch.zeros(experience.buffer_size * experience.num_envs, requires_grad=False, pin_memory=cfg.pin, **experience.tensor_args)
-        self.vf_imp = torch.zeros(experience.buffer_size * experience.num_envs, requires_grad=False, pin_memory=cfg.pin, **experience.tensor_args)
 
         self.obs_loader = DataLoader(TensorDataset(self.experience.obs_merged), batch_size=self.policy_update_batch_size, pin_memory=cfg.pin)
         self.action_loader = DataLoader(TensorDataset(self.experience.action_merged), batch_size=self.policy_update_batch_size, pin_memory=cfg.pin)
@@ -345,12 +345,12 @@ class PPO():
                     # ---------------
 
                     obs = obs[0].to(self.cfg.device, non_blocking=True)
+                    encoded_obs = self.policy.obs_encoder(obs)
+                    del obs
+
                     act = act[0].to(self.cfg.device, non_blocking=True)
                     adv = adv[0].to(self.cfg.device, non_blocking=True)
                     logp_old = logp_old[0].to(self.cfg.device)
-
-                    encoded_obs = self.policy.obs_encoder(obs)
-                    del obs
 
                     # Policy update
                     # -------------
@@ -364,8 +364,8 @@ class PPO():
 
                     # free up memory for the value function update
                     del logp_old
-                    del act
                     del adv
+                    del act
 
 
                     # VF Update
