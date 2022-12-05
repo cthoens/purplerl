@@ -276,9 +276,11 @@ class PPO():
         self.kl = torch.zeros(experience.buffer_size, experience.num_envs, requires_grad=False, pin_memory=cfg.pin, dtype=config.dtype)
         self.policy_imp = torch.zeros(experience.buffer_size * experience.num_envs, requires_grad=False, pin_memory=cfg.pin, dtype=config.dtype)
         self.vf_imp = torch.zeros(experience.buffer_size * experience.num_envs, requires_grad=False, pin_memory=cfg.pin, dtype=config.dtype)
+        self.logp_old = torch.zeros(experience.buffer_size, experience.num_envs, requires_grad=False, pin_memory=cfg.pin, dtype=config.dtype)
         self.weight = torch.zeros(experience.buffer_size, experience.num_envs, pin_memory=cfg.pin, **experience.tensor_args)
 
         self.value_old_merged = self.value_old.reshape(-1)
+        self.logp_old_merged = self.logp_old.reshape(-1)
         self.kl_merged = self.kl.reshape(-1)
         self.weight_merged = self.weight.reshape(-1)
 
@@ -291,7 +293,7 @@ class PPO():
         self.obs_loader = DataLoader(TensorDataset(self.experience.obs_merged), batch_size=self.policy_update_batch_size, pin_memory=cfg.pin)
         self.action_loader = DataLoader(TensorDataset(self.experience.action_merged), batch_size=self.policy_update_batch_size, pin_memory=cfg.pin)
         self.weight_loader = DataLoader(TensorDataset(self.weight_merged), batch_size=self.policy_update_batch_size, pin_memory=cfg.pin)
-        self.logp_old_loader = DataLoader(TensorDataset(self.experience.action_logp_merged), batch_size=self.policy_update_batch_size, pin_memory=cfg.pin)
+        self.logp_old_loader = DataLoader(TensorDataset(self.logp_old_merged), batch_size=self.policy_update_batch_size, pin_memory=cfg.pin)
 
         vf_update_batch_size = vf_update_batch_size * experience.num_envs
         self.vf_discounted_reward_loader = DataLoader(TensorDataset(experience.discounted_reward_merged), batch_size=self.policy_update_batch_size, pin_memory=cfg.pin)
@@ -313,6 +315,9 @@ class PPO():
         else:
             self.weight[torch.logical_not(self.experience.success)] *= max(self.experience.success_rate() * 2.0, 0.20)
 
+        # Use the line below to learn without value function
+        #self.weight[...] = self.experience.discounted_reward[...]
+
 
     def update(self):
         for key in self.stats:
@@ -331,6 +336,7 @@ class PPO():
 
         try:
             for update_epoch in range(self.policy_update_epochs+1):
+                is_first_epoch = update_epoch == 0
                 is_validate_epoch = update_epoch == self.policy_update_epochs
 
                 batch_start = 0
@@ -341,16 +347,24 @@ class PPO():
                     batch_range = range(batch_start, batch_start+self.policy_update_batch_size)
                     batch_start += self.policy_update_batch_size
 
-                    # Prepare dataset
-                    # ---------------
-
                     obs = obs[0].to(self.cfg.device, non_blocking=True)
                     encoded_obs = self.policy.obs_encoder(obs)
                     del obs
 
                     act = act[0].to(self.cfg.device, non_blocking=True)
+
+                    if is_first_epoch:
+                        # Calculate the pre-update log probs. This is done here to reuse the obs that are already encoded
+                        with torch.no_grad():
+                            logp_old = self.policy.action_dist(encoded_obs=encoded_obs).log_prob(act).sum(-1)
+                            self.logp_old_merged[batch_range, ...] = logp_old.cpu()
+                    else:
+                        logp_old = logp_old[0].to(self.cfg.device)
+
+                    # Prepare dataset
+                    # ---------------
+
                     adv = adv[0].to(self.cfg.device, non_blocking=True)
-                    logp_old = logp_old[0].to(self.cfg.device)
 
                     # Policy update
                     # -------------

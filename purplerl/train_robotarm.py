@@ -3,7 +3,9 @@ import os
 
 import random
 import numpy as np
+
 import torch
+from torch.distributions.normal import Normal
 
 import wandb
 
@@ -17,7 +19,7 @@ from gym.spaces import Box
 from purplerl.experience_buffer import ExperienceBuffer
 from purplerl.trainer import Trainer
 from purplerl.environment import EnvManager
-from purplerl.policy import ContinuousPolicy, PPO, mlp
+from purplerl.policy import ContinuousPolicy, PPO, StochasticPolicy, mlp
 from purplerl.config import GpuConfig
 from purplerl.resnet_mini import resnet18
 
@@ -288,11 +290,67 @@ class RobotArmObsEncoder(torch.nn.Module):
 
 
     def _goal_angles(self, obs: torch.tensor):
-        return obs[:, self.goal_angles_range]
+        return obs[:, self.goal_pos_range]
 
 
     def _remaining(self, obs: torch.tensor):
         return obs[:, self.remaining_range]
+
+
+class RobotArmHeuristic(torch.nn.Module):
+
+    def __init__(self,
+        real_policy: StochasticPolicy,
+        action_scaling: float,
+        min_std: float
+    ) -> None:
+        super().__init__()
+        self.real_policy = real_policy
+        self.action_scaling = action_scaling
+        self.min_std = min_std.to(cfg.device)
+
+        self.obs_encoder = self.real_policy.obs_encoder
+
+
+    def action_dist(self, obs=None, encoded_obs=None):
+        target = self.obs_encoder.env._joint_angles(obs) * 180.0
+        goalAngle = self.obs_encoder.env._goal_angles(obs) * 180.0
+
+        batch_size = encoded_obs.shape[0]
+        act = torch.zeros(batch_size, 5, **cfg.tensor_args)
+        act[target < goalAngle - 5.0] = 5.0
+        act[target < goalAngle - 3.0] = 3.0
+        act[target < goalAngle - 2.0] = 2.0
+        act[target < goalAngle - 1.0] = 1.0
+
+        act[target > goalAngle + 5.0] = -5.0
+        act[target > goalAngle + 3.0] = -3.0
+        act[target > goalAngle + 2.0] = -2.0
+        act[target > goalAngle + 1.0] = -1.0
+
+        #act /= self.action_scaling
+        std = self.min_std.repeat(batch_size, 1)
+
+        real_act = self.real_policy.action_dist(encoded_obs=encoded_obs)
+        use_real_policy = torch.rand(batch_size) > 0.5
+
+        act[use_real_policy] = real_act.mean[use_real_policy]
+        std[use_real_policy] = real_act.stddev[use_real_policy]
+
+        return Normal(loc=act, scale=std)
+
+
+    def to(self, device):
+        self.real_policy.to(device)
+        return self
+
+
+    def checkpoint(self):
+        return self.real_policy.checkpoint()
+
+
+    def load_checkpoint(self, checkpoint):
+        self.real_policy.load_checkpoint(checkpoint)
 
 
 def run(dev_mode:bool = False, resume_lesson: int = None, resume_checkpoint: str = None):
@@ -322,7 +380,7 @@ def run(dev_mode:bool = False, resume_lesson: int = None, resume_checkpoint: str
         "policy_neg_lower_imp_scale_scale": 0.001,
 
         "policy_lr_decay": 0.90,
-        "policy_initial_lr": 1e-6,
+        "policy_initial_lr": 1e-5,
         "policy_update_epochs" : 40,
         "policy_update_batch_size":  15,
         "policy_update_batch_count": 4,
@@ -359,7 +417,7 @@ def run(dev_mode:bool = False, resume_lesson: int = None, resume_checkpoint: str
     split_config = base_config.copy()
     split_config.update({
         "obs_encoder_outputs": 128,
-        "planner_layers": [4096, 2048],
+        "planner_layers": [2048, 2048],
         "panner_outputs": 4096,
         "planner_skip_connection": False,
         "policy_split_layers": [],
@@ -459,6 +517,12 @@ def create_trainer(
         max_std = torch.as_tensor([5.0, 5.0, 5.0, 5.0, 5.0]) / action_scaling,
     ).to(cfg.device)
 
+    heuristic= RobotArmHeuristic(
+        real_policy = policy,
+        action_scaling= action_scaling,
+        min_std = torch.as_tensor([1.0, 1.0, 1.0, 1.0, 1.0]) / action_scaling,
+    ).to(cfg.device)
+
     experience = ExperienceBuffer(
         num_envs,
         buffer_size,
@@ -510,7 +574,7 @@ def create_trainer(
         cfg = cfg,
         env_manager = env_manager,
         experience = experience,
-        policy = policy,
+        policy = heuristic,
         policy_updater = policy_updater,
         lesson_timeout_episodes = lesson_timeout_episodes,
         new_lesson_warmup_updates = new_lesson_warmup_updates,

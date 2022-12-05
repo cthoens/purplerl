@@ -111,7 +111,7 @@ class Trainer:
 
                 lesson_timeout = self.epoch - self.max_mean_return_epoch
                 self.own_stats[self.LESSON_TIMEOUT] = min((self.lesson_timeout_episodes - lesson_timeout) / self.lesson_timeout_episodes, 1.0)
-                lesson_finished = lesson_timeout > self.lesson_timeout_episodes or (self.experience.success_rate() > 0.99 and lesson_timeout > 30)
+                lesson_finished = lesson_timeout > self.lesson_timeout_episodes #or (self.experience.success_rate() > 0.99 and lesson_timeout > 30)
                 lesson_successfull = self.experience.success_rate()>=0.9
                 if lesson_finished and lesson_successfull:
                     wandb.alert(
@@ -239,7 +239,7 @@ class Trainer:
             for step, _ in enumerate(range(self.experience.buffer_size)):
                 decision_time = time.time()
                 encoded_obs = self.policy.obs_encoder(obs)
-                act_dist = self.policy.action_dist(encoded_obs = encoded_obs)
+                act_dist = self.policy.action_dist(obs=obs, encoded_obs = encoded_obs)
                 act = act_dist.sample()
                 logp = act_dist.log_prob(act).sum(-1)
                 action_mean_entropy[step, ...] = act_dist.entropy()
